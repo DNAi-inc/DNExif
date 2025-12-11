@@ -1,0 +1,68 @@
+DNAi Commercial License v1.1
+Copyright © 2025 DNAi inc.
+
+SECTION 1. DEFINITIONS
+“License” means this agreement. “Licensor” means DNAi inc. “Software” means the licensed work. “You” means the organization obtaining this License. “Authorized Users” means employees covered by your license seat count.
+
+SECTION 2. GRANT OF RIGHTS
+DNAi inc grants You a non-exclusive, non-transferable right to:
+(a) use the Software for internal business purposes,
+(b) integrate the Software into internal tools or commercial products,
+(c) distribute products that include the Software, without exposing its source.
+All rights not expressly granted remain with DNAi inc.
+
+SECTION 2.1. LICENSE PRECEDENCE
+If You have obtained a commercial subscription, purchased a commercial
+license, or otherwise entered into a commercial agreement with DNAi inc,
+your use of the Software is governed exclusively by the DNAi Commercial
+License v1.1.
+
+This Commercial License supersedes and replaces any other license text
+that may accompany the Software, including but not limited to the
+DNAi Free License v1.1 or any notices found in source files or public
+repositories.
+
+Any use of the Software by a commercial customer is governed by this
+Commercial License regardless of the location from which the Software
+was obtained.
+
+SECTION 3. RESTRICTIONS
+You may NOT:
+(a) redistribute the Software as a standalone product,
+(b) sublicense, rent, lease, lend, or host the Software,
+(c) provide the Software as a standalone hosted product or sell access to the Software itself.
+However, you MAY include the Software inside your own SaaS or hosted service,
+as long as the Software is not exposed to end users as an independent product and
+is only used as an internal component of your service.
+(d) reverse engineer or attempt to derive source,
+(e) remove or modify notices,
+(f) exceed licensed users or machines,
+(g) publish benchmarks without written approval.
+
+SECTION 4. OWNERSHIP
+DNAi inc retains full ownership of the Software. This License does not transfer ownership.
+
+SECTION 5. FEES
+Use requires payment of the license fee. Renewal terms follow DNAi inc policies.
+
+SECTION 6. UPDATES
+You receive updates if included in your plan.
+
+SECTION 7. WARRANTY DISCLAIMER
+The Software is provided “AS IS.” DNAi inc makes no warranties of any kind.
+
+SECTION 8. LIMITATION OF LIABILITY
+DNAi inc is not liable for indirect, incidental, special, or consequential damages. Total liability is limited to the fees You paid.
+
+SECTION 9. TERMINATION
+This License ends if:
+(a) You violate any term,
+(b) Your subscription expires or is not renewed.
+Upon termination You must delete all copies.
+
+SECTION 10. GOVERNING LAW
+This License is governed by Québec and Canadian law. Disputes go to Québec courts.
+
+In the event of any conflict between this Commercial License and any
+license notice contained in the Software’s source code or public
+repository, this Commercial License shall prevail.

@@ -1,0 +1,109 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.png
+
+# Project files
+pyproject.toml
+setup.py
+
+# Test directory
+tests/
+
+# Test files and test data - DO NOT COMMIT
+test_images/
+tests/test_data/**/*.jpg
+tests/test_data/**/*.jpeg
+tests/test_data/**/*.tif
+tests/test_data/**/*.tiff
+tests/test_data/**/*.png
+tests/test_data/**/*.cr2
+tests/test_data/**/*.nef
+tests/test_data/**/*.arw
+tests/test_data/**/*.dng
+tests/test_data/**/*.orf
+tests/test_data/**/*.raf
+tests/test_data/**/*.rw2
+tests/test_data/**/*.srw
+tests/test_data/**/*.pef
+tests/test_data/**/*.x3f
+tests/test_data/**/*.raw
+tests/test_data/exif-samples/
+tests/test_data/jpeg/
+tests/test_data/raw/
+tests/test_data/tiff/
+tests/test_data/with_gps/
+# Keep test_data directory structure but ignore contents
+!tests/test_data/.gitkeep
+!tests/test_data/README.md
+!tests/test_data/SOURCES.md
+!tests/test_data/GET_FILES_NOW.md
+!tests/test_data/DOWNLOAD_INSTRUCTIONS.md
+
