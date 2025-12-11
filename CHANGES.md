@@ -4,34 +4,6 @@ All notable changes to DNExif will be documented in this file.
 
 ## December 12, 2025 - License Update and Project Consolidation
 
-### License and Copyright Updates
-
-**Major Change**: Updated project licensing from Apache License 2.0 to dual-license model.
-
-1. **License Header Updates**:
-   - ✅ Updated all 136 Python source files in `dnexif/` directory with new DNAi license headers
-   - ✅ Added license headers as comments at the top of each file:
-     ```python
-     # Copyright 2025 DNAi inc.
-     #
-     # Dual-licensed under the DNAi Free License v1.1 and the
-     # DNAi Commercial License v1.1.
-     # See the LICENSE files in the project root for details.
-     ```
-   - ✅ Removed Apache License text from docstrings while preserving module descriptions
-   - ✅ Maintained code structure and functionality
-
-2. **License Files**:
-   - ✅ `LICENSE`: DNAi Free License v1.1 (for non-commercial use)
-   - ✅ `LICENSE-COMMERCIAL`: DNAi Commercial License v1.1 (for commercial use)
-   - ✅ Both license files present in project root
-
-3. **Documentation Updates**:
-   - ✅ Updated `README.md` with comprehensive dual-license information
-   - ✅ Added license precedence information
-   - ✅ Updated contributing section with license grant notice
-   - ✅ Enhanced feature documentation with advanced capabilities
-
 ### Project Status Summary
 
 **Current Version**: 0.1.3
