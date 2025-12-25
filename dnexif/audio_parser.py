@@ -588,11 +588,11 @@ class AudioParser:
                             encoding = format_map.get(audio_format, f'Format {audio_format}')
                             # Standard format shows "Microsoft PCM" for format 1, "PCM" for others
                             if audio_format == 1:
-                                encoding_standard format = 'Microsoft PCM'
+                                encoding_standard_format = 'Microsoft PCM'
                             else:
-                                encoding_standard format = encoding
+                                encoding_standard_format = encoding
                             metadata['Audio:WAV:Encoding'] = encoding
-                            metadata['RIFF:Encoding'] = encoding_standard format
+                            metadata['RIFF:Encoding'] = encoding_standard_format
                             
                             # Number of channels (2 bytes)
                             num_channels = struct.unpack('<H', fmt_data[2:4])[0]
@@ -1318,11 +1318,11 @@ class AudioParser:
                 output_gain_raw = struct.unpack('<h', head_data[8:10])[0]
                 # Standard format shows 1 when the raw value is 0
                 if output_gain_raw == 0:
-                    output_gain_standard format = 1
+                    output_gain_standard_format = 1
                 else:
-                    output_gain_standard format = output_gain_raw
+                    output_gain_standard_format = output_gain_raw
                 metadata['Audio:OPUS:OutputGain'] = f"{output_gain_raw} dB"
-                metadata['Opus:OutputGain'] = output_gain_standard format  # standard format's interpretation
+                metadata['Opus:OutputGain'] = output_gain_standard_format  # standard format's interpretation
                 
                 # Channel mapping family (1 byte)
                 channel_mapping_family = head_data[10]

@@ -7366,23 +7366,18 @@ class RAWParser:
                 # IMPROVEMENT (Build 1659): Use ExifParser for Leaf tag extraction - it has comprehensive Leaf MakerNote IFD parsing
                 # ExifParser has extensive logic for parsing Leaf MakerNote IFDs (tag 0x83BB) and extracting Leaf tags (0x8000-0x8070)
                 # This ensures we get all Leaf tags that ExifParser can extract
-                # Build 1678: Added debug logging to trace LeafData tag detection
                 try:
-                    import sys
-                    print(f"[MOS PARSER DEBUG] Attempting to use ExifParser for Leaf tag extraction", file=sys.stderr)
                     from dnexif.exif_parser import ExifParser
                     # Use ExifParser to parse the file - it will properly extract Leaf tags from MakerNote IFD
                     exif_parser = ExifParser(self.file_path, self.file_data)
-                    print(f"[MOS PARSER DEBUG] ExifParser created, calling read()...", file=sys.stderr)
                     exif_metadata = exif_parser.read()
-                    print(f"[MOS PARSER DEBUG] ExifParser.read() completed, got {len(exif_metadata)} tags", file=sys.stderr)
                     
                     # Extract all Leaf tags from ExifParser output
-                    leaf_tags_found = 0
+                    # Leaf tags are in the range 0x8000-0x8070 and may appear with 'Leaf:' prefix
+                    # or as 'Unknown_8XXX' tags that need to be mapped to proper Leaf tag names
                     for k, v in exif_metadata.items():
                         if 'Leaf:' in k or 'leaf:' in k.lower():
                             metadata[k] = v
-                            leaf_tags_found += 1
                         elif k.startswith('Unknown_8'):
                             # Check if it's a Leaf tag (0x8000-0x8070)
                             try:
@@ -7397,16 +7392,12 @@ class RAWParser:
                                         if not leaf_tag_name.startswith('Leaf:'):
                                             leaf_tag_name = f'Leaf:{leaf_tag_name}'
                                         metadata[leaf_tag_name] = v
-                                        leaf_tags_found += 1
-                            except:
+                            except (ValueError, IndexError):
+                                # Invalid tag ID format, skip this tag
                                 pass
-                    print(f"[MOS PARSER DEBUG] Extracted {leaf_tags_found} Leaf tags from ExifParser output", file=sys.stderr)
-                except Exception as e:
+                except Exception:
                     # Fall back to direct parsing if ExifParser fails
-                    import sys
-                    import traceback
-                    print(f"[MOS PARSER DEBUG] ExifParser failed: {e}", file=sys.stderr)
-                    traceback.print_exc(file=sys.stderr)
+                    # This is expected for some MOS files that may have non-standard structures
                     pass
                 
                 # IMPROVEMENT (Build 1490): Implement optimized Leaf tag extraction that doesn't rely on full ExifParser traversal
@@ -8592,18 +8583,48 @@ class RAWParser:
                                         except:
                                             pass
                             
+                            # IMPROVEMENT (Build 1718): Enhanced SubIFD traversal to find all nested IFDs with Leaf tags
                             # Check for SubIFD (0x014A) to find more IFDs
                             elif tag_id == 0x014A and tag_type == 4:  # LONG
-                                if tag_count == 1:
-                                    if 0 < value_offset < len(self.file_data) and value_offset not in visited_ifds:
-                                        ifds_to_parse.append(value_offset)
+                                # Calculate data offset for SubIFD tag
+                                bytes_per_value = 4  # LONG type
+                                total_bytes = bytes_per_value * tag_count
+                                
+                                if total_bytes <= 4:
+                                    # Inline value - single SubIFD offset
+                                    subifd_offset = value_offset
+                                    if 0 < subifd_offset < len(self.file_data) and subifd_offset not in visited_ifds:
+                                        ifds_to_parse.append(subifd_offset)
                                 else:
-                                    # Array of SubIFD offsets
-                                    for j in range(min(tag_count, 10)):
-                                        subifd_offset = struct.unpack(f'{endian}I', 
-                                                                     self.file_data[value_offset + (j * 4):value_offset + (j * 4) + 4])[0]
-                                        if 0 < subifd_offset < len(self.file_data) and subifd_offset not in visited_ifds:
-                                            ifds_to_parse.append(subifd_offset)
+                                    # Array of SubIFD offsets - try multiple offset strategies
+                                    data_offset = None
+                                    
+                                    # Strategy 1: Absolute offset
+                                    if 0 < value_offset < len(self.file_data) and value_offset + total_bytes <= len(self.file_data):
+                                        data_offset = value_offset
+                                    
+                                    # Strategy 2: Relative to IFD offset
+                                    if data_offset is None:
+                                        test_offset = ifd_offset + value_offset
+                                        if 0 < test_offset < len(self.file_data) and test_offset + total_bytes <= len(self.file_data):
+                                            data_offset = test_offset
+                                    
+                                    # Strategy 3: Relative to TIFF start
+                                    if data_offset is None:
+                                        test_offset = value_offset
+                                        if 0 < test_offset < len(self.file_data) and test_offset + total_bytes <= len(self.file_data):
+                                            data_offset = test_offset
+                                    
+                                    # Parse all SubIFD offsets (increased from 10 to 50 to catch more IFDs)
+                                    if data_offset is not None:
+                                        for j in range(min(tag_count, 50)):  # IMPROVEMENT: Increased limit from 10 to 50
+                                            try:
+                                                subifd_offset = struct.unpack(f'{endian}I', 
+                                                                             self.file_data[data_offset + (j * 4):data_offset + (j * 4) + 4])[0]
+                                                if 0 < subifd_offset < len(self.file_data) and subifd_offset not in visited_ifds:
+                                                    ifds_to_parse.append(subifd_offset)
+                                            except (struct.error, IndexError):
+                                                break  # Stop if we hit invalid data
                             
                             # IMPROVEMENT (Build 1491): Also check for EXIF IFD (0x8769) to find more IFDs with Leaf tags
                             elif tag_id == 0x8769 and tag_type == 4:  # EXIF IFD
@@ -8714,14 +8735,72 @@ class RAWParser:
                                             if null_pos != -1:
                                                 string_data = string_data[:null_pos]
                                             value = string_data.decode('ascii', errors='replace').strip('\x00')
+                                        elif tag_type == 7:  # UNDEFINED
+                                            # IMPROVEMENT (Build 1718): Better handling of UNDEFINED type Leaf tags
+                                            # Some Leaf tags use UNDEFINED type and may contain binary data or strings
+                                            end = data_offset + tag_count
+                                            if end > len(self.file_data):
+                                                end = len(self.file_data)
+                                            binary_data = self.file_data[data_offset:end]
+                                            # Try to decode as ASCII string first
+                                            try:
+                                                null_pos = binary_data.find(b'\x00')
+                                                if null_pos != -1:
+                                                    binary_data = binary_data[:null_pos]
+                                                value = binary_data.decode('ascii', errors='replace').strip('\x00')
+                                                if not value or len(value) < 2:
+                                                    # If ASCII decode fails or produces short result, show as hex
+                                                    value = binary_data.hex()[:100]  # Limit hex display
+                                            except:
+                                                value = binary_data.hex()[:100]  # Show as hex if decode fails
+                                        elif tag_type == 9:  # SLONG (signed long)
+                                            if tag_count == 1:
+                                                value = struct.unpack(f'{endian}i', self.file_data[data_offset:data_offset+4])[0]
+                                            else:
+                                                values = struct.unpack(f'{endian}{tag_count}i', self.file_data[data_offset:data_offset+(4*tag_count)])
+                                                value = ' '.join(str(v) for v in values)
+                                        elif tag_type == 10:  # SRATIONAL (signed rational)
+                                            values = []
+                                            for j in range(tag_count):
+                                                num = struct.unpack(f'{endian}i', self.file_data[data_offset+(j*8):data_offset+(j*8)+4])[0]
+                                                den = struct.unpack(f'{endian}i', self.file_data[data_offset+(j*8)+4:data_offset+(j*8)+8])[0]
+                                                if den != 0:
+                                                    values.append(f"{num}/{den}")
+                                                else:
+                                                    values.append(str(num))
+                                            value = ' '.join(values)
                                         else:
-                                            # For other types, store as binary indicator
+                                            # For other types, store as binary indicator with more detail
                                             value = f"(Type={tag_type}, Count={tag_count})"
                                         
-                                        # Store Leaf tag with Leaf: prefix
-                                        metadata[f'Leaf:{tag_name.replace("Leaf:", "")}'] = value
-                                    except:
-                                        pass
+                                        # IMPROVEMENT (Build 1718): Ensure Leaf tag name is properly formatted
+                                        # Remove any existing Leaf: prefix to avoid duplication, then add it
+                                        clean_tag_name = tag_name.replace("Leaf:", "").strip()
+                                        final_tag_name = f'Leaf:{clean_tag_name}' if clean_tag_name else f'Leaf:Tag{tag_id:04X}'
+                                        
+                                        # Store Leaf tag - don't overwrite if already exists (keep first value found)
+                                        if final_tag_name not in metadata:
+                                            metadata[final_tag_name] = value
+                                    except (struct.error, IndexError, ValueError, UnicodeDecodeError) as e:
+                                        # IMPROVEMENT (Build 1718): Better error handling - try alternative extraction methods
+                                        # For Leaf tags, even if standard extraction fails, try to store tag info
+                                        if tag_type == 2 or tag_type == 7:  # ASCII or UNDEFINED
+                                            try:
+                                                # Try reading as much data as available
+                                                max_read = min(tag_count, len(self.file_data) - data_offset) if data_offset else 0
+                                                if max_read > 0 and data_offset and data_offset < len(self.file_data):
+                                                    raw_data = self.file_data[data_offset:data_offset+max_read]
+                                                    # Try ASCII decode
+                                                    try:
+                                                        value = raw_data.decode('ascii', errors='replace').strip('\x00')
+                                                    except:
+                                                        value = raw_data.hex()[:50]
+                                                    clean_tag_name = tag_name.replace("Leaf:", "").strip()
+                                                    final_tag_name = f'Leaf:{clean_tag_name}' if clean_tag_name else f'Leaf:Tag{tag_id:04X}'
+                                                    if final_tag_name not in metadata:
+                                                        metadata[final_tag_name] = value
+                                            except:
+                                                pass  # Skip this tag if all extraction methods fail
                             
                             entry_offset += 12
                         

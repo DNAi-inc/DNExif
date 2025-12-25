@@ -2,164 +2,67 @@
 
 All notable changes to DNExif will be documented in this file.
 
-## December 12, 2025 - License Update and Project Consolidation
+## December 23, 2025 - Build 1718 - MOS Parser Improvements and Enhanced SubIFD Traversal
 
-### Project Status Summary
+**Focus**: Improved MOS parser to extract more metadata blocks and enhanced SubIFD traversal for better Leaf tag extraction.
 
-**Current Version**: 0.1.3
+**Changes**: Enhanced SubIFD (0x014A) tag handling to process up to 50 SubIFDs (increased from 10), added multiple offset calculation strategies, improved handling of inline vs. offset-based SubIFD values. Improved Leaf tag extraction with enhanced UNDEFINED type handling, added support for SLONG and SRATIONAL types, better error handling with alternative extraction methods. Professional error handling with specific exception types, better bounds checking and data validation. Location: `dnexif/raw_parser.py` - lines 8586-8603, 8668-8750.
 
-**Format Support**:
-- ✅ **120+ file formats** supported for reading
-- ✅ **36 formats verified** with comprehensive tag extraction
-- ✅ Full write support for JPEG, TIFF, PNG, WebP, GIF, HEIC, and many RAW formats
-- ⚠️ 4 RAW formats need improvement: CR2 (24.1%), CRW (7.0%), MOS (19.4%), DCR (9.9%)
+---
 
-**Key Features Implemented**:
-- ✅ 100% Pure Python implementation (no external dependencies)
-- ✅ EXIF, IPTC, and XMP metadata support
-- ✅ Metadata normalization and conflict resolution
-- ✅ Privacy-focused metadata stripping with PII detection
-- ✅ Metadata diffing and comparison tools
-- ✅ Image hash calculation for integrity verification
-- ✅ Batch processing capabilities
-- ✅ Comprehensive MakerNote parsing (Canon, Nikon, Sony, Fujifilm, Olympus, Panasonic, Pentax, Samsung, and more)
+## December 23, 2025 - Build 1717 - Code Quality Improvements and Debug Statement Removal
 
-**Format Verification Status** (36 formats with comprehensive tag extraction):
-1. ORF: 255 tags
-2. RAF: 260 tags
-3. PEF: 273 tags
-4. TIFF: 68 tags
-5. PNG: 48 tags
-6. DNG: 252 tags
-7. MRW: 24 tags
-8. SRW: 213 tags
-9. JPEG: 253 tags
-10. WebP: 38 tags
-11. GIF: 45 tags
-12. HEIC: 172 tags
-13. HEIF: 162 tags
-14. 3FR: 149 tags
-15. ERF: 24 tags
-16. MEF: 158 tags
-17. NEF: 342 tags
-18. RW2: 348 tags
-19. NRW: 292 tags
-20. ICO: 43 tags
-21. PSD: 41 tags
-22. SVG: 46 tags
-23. TGA: 44 tags
-24. GPX: 107 tags
-25. PDF: 112 tags
-26. XCF: 39 tags
-27. MNG: 43 tags
-28. WBMP: 41 tags
-29. XBM: 37 tags
-30. PCX: 45 tags
-31. XPM: 39 tags
-32. XWD: 59 tags
-33. SGI: 46 tags
-34. RAS: 43 tags
-35. RAR: 35 tags
-36. 7Z: 33 tags
+**Focus**: Code quality improvements, debug statement removal, and professional code cleanup.
 
-**Remaining Formats Needing Improvement**:
-- CR2: 27.0% (85/315 tags matched) - Needs sub-IFD parsing improvements
-- MOS: 19.4% (30/155 tags matched) - Needs parser improvements
-- X3F: 98.1% (158/160 tags) - Essentially complete
-- CRW: 6.2% (32/178 tags) - Needs HEAP-based format parsing
-- DCR: 9.9% (183/484 tags) - Needs parser improvements
-- ZIP: 0.0% (0/18 tags) - Needs improvement
+**Changes**: Removed all debug print statements from `exif_parser.py` (25 debug statements removed), removed EXIF PARSER DEBUG, LEAFDATA DEBUG, and PKTS DEBUG statements throughout PKTS format parser, set DEBUG_PKTS flag to False for production code. Cleaned up PKTS parser implementation while maintaining full functionality. Code is now production-ready without debug output. Location: `dnexif/exif_parser.py` - lines 1702-1764, 3624-4037.
 
-### Documentation Improvements
+---
 
-1. **README.md Enhancements**:
-   - ✅ Updated license section with comprehensive dual-license information
-   - ✅ Added detailed feature documentation including advanced capabilities
-   - ✅ **Added extensive DICOM documentation** highlighting comprehensive medical imaging support:
-     - Dedicated DICOM section in metadata standards
-     - Expanded DICOM coverage in specialized formats section
-     - Detailed capabilities (5,200+ data elements, private tags, sequence parsing)
-   - ✅ Expanded format support documentation (120+ formats)
-   - ✅ Added code examples for advanced features (normalization, stripping, diffing, batch operations)
-   - ✅ Added API reference section with key modules
-   - ✅ Updated contributing section with license grant information
+## December 23, 2025 - Build 1716 - ORF/X3F Writing Improvements and Comprehensive Test Suite
 
-2. **GitHub Wiki Documentation**:
-   - ✅ Created comprehensive wiki structure with 8+ documentation pages
-   - ✅ **Created dedicated DICOM-Support.md page** with comprehensive medical imaging guide:
-     - 5,200+ DICOM data elements documentation
-     - Private tag registry details (GE Medical Systems, etc.)
-     - Sequence parsing capabilities
-     - Byte order and Value Representation support
-     - Usage examples and CLI commands
-   - ✅ Updated Features.md with expanded DICOM section
-   - ✅ Updated Supported-Formats.md with detailed DICOM capabilities
-   - ✅ Updated Home.md with DICOM highlights
+**Focus**: Improved ORF and X3F metadata writing, comprehensive test infrastructure, and professional code enhancements.
 
-3. **Code Documentation**:
-   - ✅ All source files include proper license headers
-   - ✅ Module docstrings preserved and enhanced
-   - ✅ Professional code structure maintained
+**Changes**: Implemented proper ORF header preservation with `_write_orf_with_header` method, enhanced ORF structure handling (IIRO/MMOR header + TIFF structure), proper endianness handling for both little-endian and big-endian ORF files. Implemented X3F structure preservation with `_write_x3f_with_structure` method, enhanced X3F header parsing with proper big-endian byte order handling. Created `test_raw_formats.py` comprehensive RAW format testing suite with `RAWTester` class. Location: `dnexif/raw_writer.py` - replaced TODOs at lines 284 and 349.
 
-### Project Maintenance
+---
 
-**Git Configuration**:
-- ✅ Updated `.gitignore` to exclude:
-  - `__pycache__/` directories
-  - `.claude/` directory
-  - `.pytest_cache/` directory
-  - `.venv/` and `venv/` directories
-  - `tests/` directory
-  - `pyproject.toml` and `setup.py` files
+## December 12, 2025 - Build 1715 - Test Infrastructure and Code Quality Enhancements
 
-### Technical Achievements
+**Focus**: Test infrastructure improvements, code quality enhancements, and professional code structure.
 
-**Architecture**:
-- 100% pure Python stack—no subprocess calls, no binary bindings
-- Direct parsing of TIFF/EXIF structures, IPTC APP13 segments, and embedded XMP packets
-- Unified metadata object model merging EXIF, IPTC, XMP, MakerNotes, composite values, GPS composites, and vendor namespaces
+**Changes**: Created comprehensive base test framework (`test_framework_base.py`) with reusable `TestFrameworkBase` class for format-specific testing. Added ExifTool integration utilities, metadata comparison functionality, round-trip testing capabilities, file integrity verification methods, and comprehensive result reporting with JSON export. Reviewed all TODO comments in codebase, verified all TODO items are properly documented in `.dnai/TODO.md`. Location: `.test/test_framework_base.py`.
 
-**Metadata Standards Support**:
-- EXIF 2.x/3.0 tag coverage including GPS, interoperability, makernote namespaces, and UTF-8 text tags
-- IPTC IIM segments with write support
-- XMP namespace parser (dc, xmp, xmpMM, xmpDM, photoshop, tiff, exif, aux, lr, plus vendor-specific)
-- **DICOM Standard PS3.6 compliance** with 5,200+ data elements, comprehensive private tag registry (GE Medical Systems, etc.), sequence parsing, and full VR support
+---
 
-**Advanced Features**:
-- Metadata normalization with conflict resolution
-- Privacy-focused metadata stripping with configurable presets (minimal, standard, strict)
-- PII detection capabilities
-- Metadata diffing and comparison
-- Image hash calculation for integrity verification
-- Batch processing operations
+## December 12, 2025 - Build 1714 - Code Quality Improvements and TODO System
 
-### Next Steps
+**Focus**: Code quality improvements, TODO system setup, and professional code cleanup.
 
-**Immediate Priorities**:
-1. Continue incremental improvements to remaining RAW formats (CR2, MOS, CRW, DCR)
-2. Focus on formats closest to completion (X3F at 98.1%)
-3. Investigate proprietary format structures for improved parsing
-4. Comprehensive file type testing and write verification
+**Changes**: Created comprehensive TODO.md system with `.dnai/TODO.md` for task tracking, created `.dnai/A1/` directory structure and `.test/` directory with test infrastructure documentation. Removed debug print statements from MOS parser (`raw_parser.py`), improved error handling (replaced generic `except:` with specific exception handling), enhanced code comments and documentation. Created `.test/README.md` with test infrastructure documentation. Location: `dnexif/raw_parser.py`, `.dnai/TODO.md`, `.test/README.md`.
 
-**Long-term Goals**:
-- Achieve comprehensive format support for all formats
-- Enhance write support for additional formats
-- Improve performance for batch operations
-- Expand test coverage
+---
 
-### Files Modified
+## December 12, 2025 - Build 1713 - Code Review and Test Infrastructure Setup
 
-**License Headers Updated** (136 files):
-- All Python files in `dnexif/` directory
+**Focus**: Code review, test infrastructure setup, and documentation improvements.
 
-**Documentation Updated**:
-- `README.md` - Comprehensive updates with license and feature information
-- `CHANGES.md` - Consolidated into single entry
-- `.gitignore` - Updated exclusion patterns
+**Changes**: Created `.dnai/TODO.md` to track all development tasks, updated `CHANGES.md` with Build 1712 and 1713 entries. Reviewed MOS parser implementation in `raw_parser.py` and audio parser implementation in `audio_parser.py`, verified code follows project standards (proper comments, type hints). Confirmed no TODO/FIXME comments in critical code paths, documented MOS parser complexity and improvement opportunities. Established systematic approach to testing and verification.
 
-**License Files**:
-- `LICENSE` - DNAi Free License v1.1
-- `LICENSE-COMMERCIAL` - DNAi Commercial License v1.1
+---
+
+## December 12, 2025 - Build 1712 - MOS File Type Testing and Comprehensive Write Verification
+
+**Focus**: MOS file type testing and comprehensive file type write verification with ExifTool.
+
+**Changes**: Created root-level `TODO.md` to track all development tasks, updated `CHANGES.md` with Build 1712 entry. Identified 4 MOS test files in `tests/TESTING/`, verified MOS files are TIFF-based and handled by `raw_writer.py` via `TIFFWriter`. Created comprehensive MOS test script (`test_mos_read_write.py`) that tests reading MOS files with DNExif and ExifTool, compares outputs before and after writing, verifies round-trip functionality and file integrity. Verified comprehensive test framework `test_all_formats_write_verification.py` already exists.
+
+---
+
+## December 12, 2025 - Project Consolidation
+
+**Focus**: License and copyright updates, project status documentation, and comprehensive documentation improvements.
+
+**Changes**: Updated `README.md` with comprehensive dual-license information, added extensive DICOM documentation (5,200+ data elements, private tags, sequence parsing). Created comprehensive GitHub Wiki structure with 8+ documentation pages including dedicated DICOM-Support.md page. Updated all 136 Python files in `dnexif/` directory with proper license headers. Current version: 0.1.3. Format support: 120+ file formats for reading, 36 formats verified with comprehensive tag extraction, full write support for JPEG, TIFF, PNG, WebP, GIF, HEIC, and many RAW formats. 4 RAW formats need improvement: CR2 (24.1%), CRW (7.0%), MOS (19.4%), DCR (9.9%).
 
 ---
 

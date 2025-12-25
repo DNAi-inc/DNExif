@@ -58,6 +58,8 @@ env/
 *.swo
 *~
 .claude/
+.dnai/
+.test/
 
 # OS
 .DS_Store

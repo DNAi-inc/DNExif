@@ -1701,10 +1701,7 @@ class ExifParser:
             
             # CRITICAL: Check for LeafData tag (0x8606) early, before regular tag processing
             # This tag contains PKTS format data with Leaf tags and must be processed specially
-            # Build 1678: Added debug logging to trace tag detection
             if tag_id == 0x8606:  # LeafData (Build 1676: Moved check earlier to ensure it's processed)
-                import sys
-                print(f"[EXIF PARSER DEBUG] Found tag 0x8606 (LeafData) at IFD entry offset {entry_offset}, count={count}, value_offset={value_offset_int}", file=sys.stderr)
                 # LeafData is a proprietary PKTS format used by Leaf cameras in MOS files
                 # It contains Leaf tags (0x8000-0x8070) in a custom directory structure
                 # Standard format shows this as "LeafData (SubDirectory)" with a "[Leaf directory]" inside
@@ -1741,27 +1738,13 @@ class ExifParser:
                         # Check for PKTS header
                         if leafdata_data.startswith(b'PKTS'):
                             # Parse PKTS format
-                            # Build 1677: Debug logging
-                            import sys
-                            print(f"[LEAFDATA DEBUG] Found PKTS header at start of LeafData (size: {len(leafdata_data)} bytes)", file=sys.stderr)
-                            print(f"[LEAFDATA DEBUG] First 64 bytes: {leafdata_data[:64].hex()}", file=sys.stderr)
                             self._parse_pkts_format(leafdata_data, metadata)
-                            print(f"[LEAFDATA DEBUG] After PKTS parsing, metadata has {len(metadata)} entries", file=sys.stderr)
-                            leaf_tags = {k: v for k, v in metadata.items() if 'Leaf:' in k}
-                            print(f"[LEAFDATA DEBUG] Leaf tags found: {len(leaf_tags)}", file=sys.stderr)
                         elif len(leafdata_data) > 0:
                             # Try to find PKTS header anywhere in the data (might not be at start)
                             pkts_pos = leafdata_data.find(b'PKTS')
                             if pkts_pos >= 0:
                                 # Found PKTS header, parse from that position
-                                import sys
-                                print(f"[LEAFDATA DEBUG] Found PKTS header at offset {pkts_pos} in LeafData (size: {len(leafdata_data)} bytes)", file=sys.stderr)
                                 self._parse_pkts_format(leafdata_data[pkts_pos:], metadata)
-                                print(f"[LEAFDATA DEBUG] After PKTS parsing, metadata has {len(metadata)} entries", file=sys.stderr)
-                            else:
-                                import sys
-                                print(f"[LEAFDATA DEBUG] Warning: No PKTS header found in LeafData (size: {len(leafdata_data)} bytes)", file=sys.stderr)
-                                print(f"[LEAFDATA DEBUG] First 64 bytes: {leafdata_data[:64].hex()}", file=sys.stderr)
                 except Exception as e:
                     # If LeafData parsing fails, continue with other tags (don't store raw tag)
                     pass
@@ -3645,11 +3628,10 @@ class ExifParser:
             This parser handles string values (most common), numeric values (parsed from strings),
             and skips container tags that don't have direct values.
         
-        Build 1677: Added debug logging to trace parser execution and identify extraction issues.
+        Build 1717: Removed debug logging for production code.
         """
-        # Build 1677: Debug flag - set to True to enable detailed logging
-        # Temporarily enabled for Build 1677 debugging session
-        DEBUG_PKTS = True  # Set to False to disable debug output
+        # Debug flag - set to True to enable detailed logging for debugging
+        DEBUG_PKTS = False  # Disabled for production
         # Mapping from PKTS tag names to Leaf tag names (from standard format analysis)
         # PKTS uses abbreviated names like "CamProf_version" -> "CameraProfileVersion"
         pkts_to_leaf_map = {
@@ -3802,13 +3784,6 @@ class ExifParser:
         offset = 0
         max_offset = len(pkts_data)
         
-        # Build 1677: Debug logging
-        if DEBUG_PKTS:
-            import sys
-            print(f"[PKTS DEBUG] Starting PKTS parser with {max_offset} bytes of data", file=sys.stderr)
-            print(f"[PKTS DEBUG] First 64 bytes (hex): {pkts_data[:64].hex()}", file=sys.stderr)
-            print(f"[PKTS DEBUG] First 64 bytes (ASCII): {pkts_data[:64]!r}", file=sys.stderr)
-        
         # Import EXIF_TAG_NAMES for reverse lookup
         from dnexif.exif_tags import EXIF_TAG_NAMES
         
@@ -3818,12 +3793,6 @@ class ExifParser:
             if tag_name.startswith('Leaf:'):
                 leaf_name = tag_name[5:]  # Remove "Leaf:" prefix
                 leaf_name_to_id[leaf_name] = tag_id
-        
-        # Build 1677: Debug logging
-        if DEBUG_PKTS:
-            import sys
-            print(f"[PKTS DEBUG] Created leaf_name_to_id mapping with {len(leaf_name_to_id)} entries", file=sys.stderr)
-            print(f"[PKTS DEBUG] Sample mappings: {list(leaf_name_to_id.items())[:5]}", file=sys.stderr)
         
         tags_found = 0
         pkts_entries_found = 0
@@ -3841,9 +3810,6 @@ class ExifParser:
             # Found PKTS header
             pkts_magic = pkts_data[offset:offset+4]
             pkts_entries_found += 1
-            if DEBUG_PKTS:
-                import sys
-                print(f"[PKTS DEBUG] Found PKTS entry #{pkts_entries_found} at offset {offset}", file=sys.stderr)
             offset += 4
             
             # Read version (4 bytes, little-endian)
@@ -3859,16 +3825,10 @@ class ExifParser:
                 break  # No null terminator found
             
             pkts_tag_name = pkts_data[offset:tag_name_end].decode('ascii', errors='ignore')
-            if DEBUG_PKTS:
-                import sys
-                print(f"[PKTS DEBUG]   PKTS tag name: '{pkts_tag_name}' (offset {offset}-{tag_name_end})", file=sys.stderr)
             offset = tag_name_end + 1
             
             # Skip container tags (they have None as value in map)
             if pkts_tag_name in pkts_to_leaf_map and pkts_to_leaf_map[pkts_tag_name] is None:
-                if DEBUG_PKTS:
-                    import sys
-                    print(f"[PKTS DEBUG]   Skipping container tag: '{pkts_tag_name}'", file=sys.stderr)
                 # Container tag - skip to next PKTS entry
                 # Find next PKTS header
                 next_pkts = pkts_data.find(b'PKTS', offset)
@@ -3883,13 +3843,6 @@ class ExifParser:
                 # Try to find by partial match or use original name
                 # Some tags might not be in our map yet
                 leaf_tag_name = pkts_tag_name
-                if DEBUG_PKTS:
-                    import sys
-                    print(f"[PKTS DEBUG]   PKTS tag '{pkts_tag_name}' not in map, using as-is", file=sys.stderr)
-            else:
-                if DEBUG_PKTS:
-                    import sys
-                    print(f"[PKTS DEBUG]   Mapped '{pkts_tag_name}' -> '{leaf_tag_name}'", file=sys.stderr)
             
             # Read value
             # PKTS format: After tag name null terminator, there may be padding (null bytes),
@@ -3946,9 +3899,6 @@ class ExifParser:
             
             if value_end <= value_start or not found_printable:
                 # No valid value found, skip to next PKTS entry
-                if DEBUG_PKTS:
-                    import sys
-                    print(f"[PKTS DEBUG]   No valid value found for '{pkts_tag_name}' (value_start={value_start}, value_end={value_end}, found_printable={found_printable})", file=sys.stderr)
                 if next_pkts != -1:
                     offset = next_pkts
                 else:
@@ -4015,26 +3965,10 @@ class ExifParser:
                 else:
                     # Tag not in standard map, use descriptive name
                     full_tag_name = f'Leaf:{leaf_tag_name}'
-                    if DEBUG_PKTS:
-                        import sys
-                        print(f"[PKTS DEBUG]   Warning: Leaf tag name '{leaf_tag_name}' not found in leaf_name_to_id map", file=sys.stderr)
                 
                 # Store in metadata
                 metadata[full_tag_name] = value
                 tags_found += 1
-                if DEBUG_PKTS:
-                    import sys
-                    print(f"[PKTS DEBUG]   ✓ Stored tag: '{full_tag_name}' = {value!r} (tag_id={tag_id})", file=sys.stderr)
-            else:
-                if DEBUG_PKTS:
-                    import sys
-                    print(f"[PKTS DEBUG]   Skipping tag: leaf_tag_name={leaf_tag_name!r}, value={value!r}", file=sys.stderr)
-        
-        # Build 1677: Debug summary
-        if DEBUG_PKTS:
-            import sys
-            print(f"[PKTS DEBUG] Parser complete: Found {pkts_entries_found} PKTS entries, extracted {tags_found} tags", file=sys.stderr)
-            print(f"[PKTS DEBUG] Total metadata entries after PKTS parsing: {len(metadata)}", file=sys.stderr)
     
     def _read_tag_value(
         self,
