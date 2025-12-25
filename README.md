@@ -9,16 +9,16 @@ DNExif is a complete native Python implementation with **NO external dependencie
 It provides comprehensive metadata extraction and manipulation capabilities, supporting multiple metadata standards including EXIF, IPTC, and XMP across various image formats.
 
 **Key Features:**
-- ✅ 100% Pure Python - No external dependencies
-- ✅ Direct binary parsing - No wrappers or subprocess calls
-- ✅ Clean, intuitive API
-- ✅ Supports EXIF, IPTC, and XMP metadata
-- ✅ Metadata normalization and conflict resolution
-- ✅ Privacy-focused metadata stripping with PII detection
-- ✅ Metadata diffing and comparison tools
-- ✅ Image hash calculation for integrity verification
-- ✅ Batch processing capabilities
-- ✅ Support for 120+ file formats
+- 100% Pure Python - No external dependencies
+- Direct binary parsing - No wrappers or subprocess calls
+- Clean, intuitive API
+- Supports EXIF, IPTC, and XMP metadata
+- Metadata normalization and conflict resolution
+- Privacy-focused metadata stripping with PII detection
+- Metadata diffing and comparison tools
+- Image hash calculation for integrity verification
+- Batch processing capabilities
+- Support for 120+ file formats
 
 ## Features
 
@@ -264,10 +264,10 @@ DNExif extracts comprehensive metadata from all supported formats, providing det
 
 For **non-commercial use** (personal, academic, educational, research, development, testing, or evaluation):
 
-- ✅ Free to use, modify, and distribute
-- ✅ Non-commercial use only
-- ✅ Must include license and copyright notices
-- ❌ No commercial use (requires commercial license)
+- Free to use, modify, and distribute
+- Non-commercial use only
+- Must include license and copyright notices
+- No commercial use (requires commercial license)
 
 See `LICENSE` file for full terms.
 
@@ -275,12 +275,12 @@ See `LICENSE` file for full terms.
 
 For **commercial use** (business, production, SaaS, commercial products):
 
-- ✅ Commercial use permitted
-- ✅ Integration into commercial products
-- ✅ Internal business use
-- ✅ Distribution in commercial products
-- ❌ Cannot redistribute as standalone product
-- ❌ Cannot provide as standalone hosted service
+- Commercial use permitted
+- Integration into commercial products
+- Internal business use
+- Distribution in commercial products
+- Cannot redistribute as standalone product
+- Cannot provide as standalone hosted service
 
 **Commercial licenses are available from DNAi inc.** Contact DNAi for commercial licensing options.
 
