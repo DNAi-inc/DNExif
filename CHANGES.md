@@ -2,6 +2,10 @@
 
 All notable changes to DNExif will be documented in this file.
 
+## December 23, 2025 
+
+Enhance audio and video metadata handling: Added legacy GUID support in audio parser, improved metadata extraction in video writer, and refined error handling in various parsers. Updated metadata handling for multiple formats to ensure consistency and accuracy.
+
 ## December 23, 2025 - Builds 1716-1718
 
 **MOS Parser & SubIFD Improvements (1718)**: Enhanced SubIFD traversal to process up to 50 SubIFDs (from 10), improved Leaf tag extraction with SLONG/SRATIONAL support, better error handling and bounds checking.
