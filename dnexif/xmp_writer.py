@@ -92,6 +92,27 @@ class XMPWriter:
     def __init__(self):
         """Initialize XMP writer."""
         pass
+
+    @staticmethod
+    def _sanitize_text(value: Any) -> str:
+        """
+        Remove characters disallowed by XML 1.0 to prevent parse errors.
+        """
+        if value is None:
+            return ''
+        text = str(value)
+        cleaned_chars = []
+        for ch in text:
+            codepoint = ord(ch)
+            if codepoint in (0x9, 0xA, 0xD):
+                cleaned_chars.append(ch)
+            elif 0x20 <= codepoint <= 0xD7FF:
+                cleaned_chars.append(ch)
+            elif 0xE000 <= codepoint <= 0xFFFD:
+                cleaned_chars.append(ch)
+            elif 0x10000 <= codepoint <= 0x10FFFF:
+                cleaned_chars.append(ch)
+        return ''.join(cleaned_chars)
     
     def build_xmp_packet(self, metadata: Dict[str, Any]) -> bytes:
         """
@@ -240,7 +261,7 @@ class XMPWriter:
             bag_elem = ET.SubElement(bag, '{http://www.w3.org/1999/02/22-rdf-syntax-ns#}Bag')
             for item in value:
                 li = ET.SubElement(bag_elem, '{http://www.w3.org/1999/02/22-rdf-syntax-ns#}li')
-                li.text = str(item)
+                li.text = self._sanitize_text(item)
         elif isinstance(value, dict):
             # Structure
             struct = ET.SubElement(parent, name)
@@ -250,7 +271,7 @@ class XMPWriter:
         else:
             # Simple value
             elem = ET.SubElement(parent, name)
-            elem.text = str(value)
+            elem.text = self._sanitize_text(value)
     
     def build_app1_xmp_segment(self, xmp_packet: bytes) -> bytes:
         """
@@ -292,4 +313,3 @@ class XMPWriter:
         segment.extend(xmp_packet)
         
         return bytes(segment)
-

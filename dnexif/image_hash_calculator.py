@@ -885,15 +885,42 @@ class ImageHashCalculator:
         # Each section: 4 bytes header (1 byte type + 3 bytes name), 4 bytes size (big-endian), then data
         # TIFF structure is usually embedded within one of the sections
         tiff_offset = None
-        
-        # Search for TIFF signature (II*\x00 or MM\x00*)
-        for i in range(8, min(10000, len(file_data) - 4)):
-            if file_data[i:i+2] == b'II' and file_data[i+2:i+4] == b'*\x00':
-                tiff_offset = i
+        ttw_offset = None
+        ttw_size = None
+
+        # Parse MRW sections to locate TTW block
+        offset = 8
+        while offset + 8 <= len(file_data):
+            header = file_data[offset:offset + 4]
+            if header == b'\x00\x00\x00\x00':
                 break
-            elif file_data[i:i+2] == b'MM' and file_data[i+2:i+4] == b'\x00*':
-                tiff_offset = i
+            size = struct.unpack('>I', file_data[offset + 4:offset + 8])[0]
+            data_offset = offset + 8
+            if size == 0 or data_offset + size > len(file_data):
                 break
+            if header[1:4] == b'TTW':
+                ttw_offset = data_offset
+                ttw_size = size
+                break
+            offset = data_offset + size
+
+        # Search for TIFF signature (II*\x00 or MM\x00*), prefer TTW section if present.
+        if ttw_offset is not None and ttw_size:
+            ttw_data = file_data[ttw_offset:ttw_offset + ttw_size]
+            tiff_pos = ttw_data.find(b'II*\x00')
+            if tiff_pos == -1:
+                tiff_pos = ttw_data.find(b'MM\x00*')
+            if tiff_pos != -1:
+                tiff_offset = ttw_offset + tiff_pos
+
+        if tiff_offset is None:
+            for i in range(8, min(10000, len(file_data) - 4)):
+                if file_data[i:i+2] == b'II' and file_data[i+2:i+4] == b'*\x00':
+                    tiff_offset = i
+                    break
+                elif file_data[i:i+2] == b'MM' and file_data[i+2:i+4] == b'\x00*':
+                    tiff_offset = i
+                    break
         
         if tiff_offset is None:
             return None
@@ -1666,4 +1693,3 @@ def add_image_data_hash_to_metadata(
             metadata[f'Composite:ImageDataHash'] = hash_value
     
     return metadata
-

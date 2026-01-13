@@ -14,6 +14,9 @@ Copyright 2025 DNAi inc.
 """
 
 import struct
+import os
+import sys
+import time
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -660,12 +663,19 @@ class DICOMParser:
             Dictionary of DICOM metadata
         """
         try:
+            timing = os.getenv('DNEXIF_DICOM_TIMING') == '1'
+            t_start = time.perf_counter()
+            if timing:
+                src = str(self.file_path) if self.file_path else '<bytes>'
+                print(f"[DICOM TIMING] parse start: {src}", file=sys.stderr)
             # Read file data
             if self.file_data is None:
                 with open(self.file_path, 'rb') as f:
                     file_data = f.read()
             else:
                 file_data = self.file_data
+            if timing:
+                print(f"[DICOM TIMING] read bytes: {len(file_data)} in {time.perf_counter() - t_start:.3f}s", file=sys.stderr)
             
             if len(file_data) < self.DICOM_PREAMBLE_LENGTH + 4:
                 raise MetadataReadError("Invalid DICOM file: too short")
@@ -684,8 +694,10 @@ class DICOMParser:
             
             # First, parse File Meta Information (group 0002) to get TransferSyntaxUID
             # File Meta Information is always in little-endian
-            file_meta_info = self._parse_file_meta_info(file_data, offset)
+            file_meta_info = self._parse_file_meta_info(file_data, offset, timing=timing)
             metadata.update(file_meta_info)
+            if timing:
+                print(f"[DICOM TIMING] file meta parsed in {time.perf_counter() - t_start:.3f}s", file=sys.stderr)
             
             # Get TransferSyntaxUID to determine byte order for Data Set
             transfer_syntax_uid = file_meta_info.get('DICOM:TransferSyntaxUID', '')
@@ -710,7 +722,13 @@ class DICOMParser:
             # Parse DICOM data elements (Data Set)
             # Use byte order determined from TransferSyntaxUID
             try:
-                parsed_elements = self._parse_data_elements(file_data, data_set_offset, is_big_endian=is_big_endian)
+                parsed_elements = self._parse_data_elements(
+                    file_data,
+                    data_set_offset,
+                    is_big_endian=is_big_endian,
+                    timing=timing,
+                    timing_start=t_start,
+                )
                 # Remove internal _next_offset key if present
                 parsed_elements.pop('_next_offset', None)
                 metadata.update(parsed_elements)
@@ -720,12 +738,14 @@ class DICOMParser:
                 import traceback
                 metadata['DICOM:ParseErrorTraceback'] = traceback.format_exc()
             
+            if timing:
+                print(f"[DICOM TIMING] parse end in {time.perf_counter() - t_start:.3f}s", file=sys.stderr)
             return metadata
         
         except Exception as e:
             raise MetadataReadError(f"Failed to parse DICOM metadata: {str(e)}")
     
-    def _parse_file_meta_info(self, data: bytes, offset: int) -> Dict[str, Any]:
+    def _parse_file_meta_info(self, data: bytes, offset: int, timing: bool = False) -> Dict[str, Any]:
         """
         Parse File Meta Information (group 0002) to get TransferSyntaxUID.
         File Meta Information is always in little-endian.
@@ -809,7 +829,14 @@ class DICOMParser:
         
         return metadata
     
-    def _parse_data_elements(self, data: bytes, offset: int, is_big_endian: bool = False) -> Dict[str, Any]:
+    def _parse_data_elements(
+        self,
+        data: bytes,
+        offset: int,
+        is_big_endian: bool = False,
+        timing: bool = False,
+        timing_start: Optional[float] = None
+    ) -> Dict[str, Any]:
         """
         Parse DICOM data elements.
         
@@ -838,6 +865,15 @@ class DICOMParser:
             max_elements = 5000  # Increased limit for comprehensive parsing
             
             while offset < max_offset and element_count < max_elements:
+                element_count += 1
+                if timing and element_count % 500 == 0:
+                    now = time.perf_counter()
+                    if now - last_log >= 1.0:
+                        print(
+                            f"[DICOM TIMING] elements={element_count} offset={offset} elapsed={now - timing_start:.3f}s",
+                            file=sys.stderr
+                        )
+                        last_log = now
                 if offset + 8 > len(data):
                     break
                 
@@ -1110,7 +1146,7 @@ class DICOMParser:
                     # Negative length - invalid, skip this tag
                     break
                 
-                element_count += 1
+                # element_count incremented at top of loop
             
             metadata['DICOM:ElementCount'] = element_count
         
@@ -2037,7 +2073,7 @@ class DICOMParser:
         if element_info:
             keyword = element_info.keyword
             # Convert to standard format (shorter names)
-            keyword = self._convert_to_standard format_format(keyword)
+            keyword = self._convert_to_standard_format(keyword)
             return keyword
         
         # Check private tag registry (manufacturer-specific tags)
@@ -2051,7 +2087,7 @@ class DICOMParser:
         name = _DICOM_TAG_DICT.get((group, element))
         if name:
             # Convert to standard format
-            name = self._convert_to_standard format_format(name)
+            name = self._convert_to_standard_format(name)
             return name
         
         # For unmapped tags, check if it's a curve data tag (group 5000-50FF)
@@ -2062,7 +2098,7 @@ class DICOMParser:
             curve_element_info = get_dicom_element_info(0x5000, element)
             if curve_element_info:
                 keyword = curve_element_info.keyword
-                keyword = self._convert_to_standard format_format(keyword)
+                keyword = self._convert_to_standard_format(keyword)
                 return keyword
         
         # For unmapped tags, generate a name from group/element
@@ -2070,7 +2106,7 @@ class DICOMParser:
         # Note: standard format may have keyword names for these, but we don't have them in our registry yet
         return f"Tag_{group:04X}_{element:04X}"
     
-    def _convert_to_standard format_format(self, keyword: str) -> str:
+    def _convert_to_standard_format(self, keyword: str) -> str:
         """
         Convert DICOM keyword to standard format.
         
@@ -2084,13 +2120,13 @@ class DICOMParser:
             standard format-formatted keyword name
         """
         # standard format name mappings (shorter names and different spellings)
-        standard format_mappings = {
+        standard_format_mappings = {
             'FileMetaInformationGroupLength': 'FileMetaInfoGroupLength',
             'FileMetaInformationVersion': 'FileMetaInfoVersion',
             'ManufacturerModelName': 'ManufacturersModelName',  # Standard format uses plural
             # Add more mappings as needed
         }
-        return standard format_mappings.get(keyword, keyword)
+        return standard_format_mappings.get(keyword, keyword)
     
     def _get_tag_info(self, group: int, element: int) -> Optional[DICOMDataElement]:
         """
@@ -2104,4 +2140,3 @@ class DICOMParser:
             DICOMDataElement if found, None otherwise
         """
         return get_dicom_element_info(group, element)
-

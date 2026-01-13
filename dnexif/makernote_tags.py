@@ -2487,6 +2487,26 @@ CANON_AF_INFO_TAGS = {
     0x001C: "FocusDistanceLower",
 }
 
+# Canon AFInfo2 SerialData tags (parent tag 0x0026, used on newer cameras like EOS 550D)
+# SerialData format: pairs of [tag_id, value] as SHORTs
+CANON_AF_INFO2_TAGS = {
+    0x0000: "AFInfoSize",
+    0x0001: "AFAreaMode",
+    0x0002: "NumAFPoints",
+    0x0003: "ValidAFPoints",
+    0x0004: "CanonImageWidth",
+    0x0005: "CanonImageHeight",
+    0x0006: "AFImageWidth",
+    0x0007: "AFImageHeight",
+    0x0008: "AFAreaWidths",
+    0x0009: "AFAreaHeights",
+    0x000A: "AFAreaXPositions",
+    0x000B: "AFAreaYPositions",
+    0x000C: "AFPointsInFocus",
+    0x000D: "AFPointsSelected",
+    0x000E: "PrimaryAFPoint",
+}
+
 # Canon ColorBalance sub-IFD tags (parent tag 0x001A)
 CANON_COLOR_BALANCE_TAGS = {
     0x0001: "ColorTemperature",

@@ -1696,12 +1696,14 @@ class AudioParser:
                 if offset + 24 > data_len:
                     break
             
+            # ASF GUIDs are stored with the first three fields in little-endian order.
             # Extended Content Description Object GUID: 40A4D0D2-07E3-D211-97F0-00A0C95EA850
-            # Stored as: 40 A4 D0 D2 07 E3 D2 11 97 F0 00 A0 C9 5E A8 50 (big-endian)
-            ext_content_desc_guid = bytes.fromhex('40a4d0d207e3d21197f000a0c95ea850')
+            ext_content_desc_guid = bytes.fromhex('d2d0a440e30711d297f000a0c95ea850')
+            ext_content_desc_guid_legacy = bytes.fromhex('40a4d0d207e3d21197f000a0c95ea850')
             
-            # Also check for Content Description Object GUID: 75B22630-668E-11CF-A6D9-00AA0062CE6C
-            content_desc_guid = bytes.fromhex('3026b275668ecf11a6d900aa0062ce6c')
+            # Content Description Object GUID: 75B22633-668E-11CF-A6D9-00AA0062CE6C
+            content_desc_guid = bytes.fromhex('3326b2758e66cf11a6d900aa0062ce6c')
+            content_desc_guid_legacy = bytes.fromhex('75b22633668e11cfa6d900aa0062ce6c')
             
             # Search for Extended Content Description Object (more common) or Content Description Object
             # ASF objects have: GUID (16 bytes) + Size (8 bytes) + Data
@@ -1718,6 +1720,14 @@ class AudioParser:
                     break
                 ext_content_positions.append(pos)
                 offset = pos + 1
+            offset = 0
+            while offset < data_len:
+                pos = file_data.find(ext_content_desc_guid_legacy, offset)
+                if pos == -1:
+                    break
+                ext_content_positions.append(pos)
+                offset = pos + 1
+            ext_content_positions = sorted(set(ext_content_positions))
             
             # Parse all Extended Content Description Objects (check last one first as it's likely the newest)
             for pos in reversed(ext_content_positions):
@@ -1727,7 +1737,7 @@ class AudioParser:
                 offset = pos
                 if offset + 24 <= data_len:
                     # Check for Extended Content Description Object GUID
-                    if file_data[offset:offset+16] == ext_content_desc_guid:
+                    if file_data[offset:offset+16] in (ext_content_desc_guid, ext_content_desc_guid_legacy):
                         # Read object size (8 bytes, little-endian)
                         obj_size = struct.unpack('<Q', file_data[offset+16:offset+24])[0]
                         if obj_size < 26 or offset + obj_size > data_len:
@@ -1861,7 +1871,7 @@ class AudioParser:
             if not found_title:
                 offset = 0
                 while offset + 24 <= data_len:
-                    if file_data[offset:offset+16] == content_desc_guid:
+                    if file_data[offset:offset+16] in (content_desc_guid, content_desc_guid_legacy):
                         # Read object size (8 bytes, little-endian)
                         obj_size = struct.unpack('<Q', file_data[offset+16:offset+24])[0]
                         if obj_size < 24 or offset + obj_size > data_len:
@@ -3080,4 +3090,3 @@ class AudioParser:
                 self.file_data = data
                 return data
         return self.file_data or b''
-

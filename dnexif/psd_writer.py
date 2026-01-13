@@ -82,17 +82,17 @@ class PSDWriter:
             psd_metadata = {}
             
             for key, value in metadata.items():
-                if key.startswith('EXIF:'):
-                    exif_metadata[key[5:]] = value
-                elif key.startswith('XMP:'):
-                    xmp_metadata[key[4:]] = value
-                elif key.startswith('IPTC:'):
-                    iptc_metadata[key[5:]] = value
-                elif key.startswith('PSD:'):
-                    psd_metadata[key[4:]] = value
-                else:
-                    # Default to EXIF for unknown prefixes
+                if key.startswith(('EXIF:', 'IFD0:', 'GPS:')):
                     exif_metadata[key] = value
+                elif key.startswith('XMP:'):
+                    xmp_metadata[key] = value
+                elif key.startswith('IPTC:'):
+                    iptc_metadata[key] = value
+                elif key.startswith('PSD:'):
+                    psd_metadata[key] = value
+                else:
+                    # Default to EXIF namespace for unknown prefixes
+                    exif_metadata[f"EXIF:{key}"] = value
             
             # Find image resources section
             # PSD structure: Header (26 bytes) -> Color Mode Data -> Image Resources -> Layers -> Image Data
@@ -115,14 +115,19 @@ class PSDWriter:
             # Update or add resources
             if exif_metadata:
                 exif_data = self.exif_writer.build_exif_segment(exif_metadata)
+                if exif_data.startswith(b'\xFF\xE1') and len(exif_data) > 10:
+                    if exif_data[4:10] == b'Exif\x00\x00':
+                        exif_data = exif_data[10:]
                 resources[self.RESOURCE_EXIF] = exif_data
             
             if xmp_metadata:
                 xmp_packet = self.xmp_writer.build_xmp_packet(xmp_metadata)
-                resources[self.RESOURCE_XMP] = xmp_packet.encode('utf-8')
+                resources[self.RESOURCE_XMP] = (
+                    xmp_packet if isinstance(xmp_packet, bytes) else xmp_packet.encode('utf-8')
+                )
             
             if iptc_metadata:
-                iptc_data = self.iptc_writer.build_iptc_segment(iptc_metadata)
+                iptc_data = self.iptc_writer.build_iptc_data(iptc_metadata)
                 resources[self.RESOURCE_IPTC] = iptc_data
             
             # Rebuild image resources section
@@ -180,9 +185,8 @@ class PSDWriter:
             # Read name (Pascal string)
             name_len = resources_data[offset+6]
             name_start = offset + 7
-            name_end = name_start + name_len
-            if name_len % 2 == 1:  # Pascal strings are padded to even length
-                name_end += 1
+            name_pad = (1 + name_len) % 2
+            name_end = name_start + name_len + name_pad
             
             if name_end > len(resources_data):
                 break
@@ -195,15 +199,14 @@ class PSDWriter:
             data_size = struct.unpack('>I', resources_data[data_start:data_start+4])[0]
             data_start += 4
             
-            if data_size % 2 == 1:  # Data is padded to even length
-                data_size += 1
+            padded_data_size = data_size + (data_size % 2)
             
-            data_end = data_start + data_size
+            data_end = data_start + padded_data_size
             if data_end > len(resources_data):
                 break
             
             # Extract resource data
-            resource_data = resources_data[data_start:data_end]
+            resource_data = resources_data[data_start:data_start + data_size]
             resources[resource_id] = resource_data
             
             offset = data_end
@@ -227,20 +230,17 @@ class PSDWriter:
             signature = b'8BIM'
             resource_id_bytes = struct.pack('>H', resource_id)
             
-            # Name (empty Pascal string)
-            name = b'\x00'
+            # Name (empty Pascal string + padding to even length)
+            name = b'\x00\x00'
             
-            # Data size
+            # Data size (un-padded length)
             data_size = len(resource_data)
-            if data_size % 2 == 1:  # Pad to even length
-                resource_data += b'\x00'
-                data_size += 1
-            
             data_size_bytes = struct.pack('>I', data_size)
+            if data_size % 2 == 1:
+                resource_data += b'\x00'
             
             # Build resource
             resource = signature + resource_id_bytes + name + data_size_bytes + resource_data
             resources_data += resource
         
         return resources_data
-

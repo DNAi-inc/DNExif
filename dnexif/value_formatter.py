@@ -648,7 +648,10 @@ def format_exif_value(tag_name: str, value: Any, context: Optional[Dict[str, Any
             # So: exposure_time = 1 / (2^value)
             import math
             if result != 0:
-                exposure_time = 1.0 / (2 ** result)
+                try:
+                    exposure_time = 1.0 / (2 ** result)
+                except OverflowError:
+                    return str(result)
                 # Format as fraction if < 1 second
                 if exposure_time < 1 and exposure_time > 0:
                     # Find closest 1/X representation
@@ -669,7 +672,10 @@ def format_exif_value(tag_name: str, value: Any, context: Optional[Dict[str, Any
             # So: f_number = sqrt(2^value)
             import math
             if result != 0:
-                f_number = math.sqrt(2 ** result)
+                try:
+                    f_number = math.sqrt(2 ** result)
+                except OverflowError:
+                    return str(result)
                 # Round to 1 decimal place for f-numbers
                 return f"{f_number:.1f}"
             return str(result)
@@ -783,103 +789,30 @@ def format_exif_value(tag_name: str, value: Any, context: Optional[Dict[str, Any
             # But since we don't know the correct value, we'll need to fix the parser
             # For now, return as-is - the parser needs to be fixed to read as RATIONAL
             return value
-        
-        # ShutterSpeedValue - APEX units, convert to fraction format
-        if tag_key == 'ShutterSpeedValue':
-            # num and den are already defined from the tuple unpacking above (line 535)
-            # But handle case where value might be a string "num den" format
-            if isinstance(value, str):
-                parts = value.split()
-                if len(parts) == 2:
-                    try:
-                        num, den = int(parts[0]), int(parts[1])
-                    except:
-                        return str(value)
-                else:
-                    return str(value)
-            elif not isinstance(value, tuple):
-                # Not a tuple and not a string - might be already processed
+
+        parts = value.split()
+        if len(parts) == 2:
+            try:
+                num, den = int(parts[0]), int(parts[1])
+            except (ValueError, TypeError):
                 return str(value)
-            
-            # num and den should be available from line 535 (tuple unpacking)
-            # But if we got here from string parsing, they're set above
             if den == 0:
                 return str(value)
             result = num / den
-            # ShutterSpeedValue is in APEX: value = log2(1/exposure_time)
-            # So: exposure_time = 1 / (2^value)
-            import math
-            if result != 0:
-                exposure_time = 1.0 / (2 ** result)
-                # Format as fraction if < 1 second
-                if exposure_time < 1 and exposure_time > 0:
-                    # Find closest 1/X representation
-                    closest_den = round(1.0 / exposure_time)
-                    if abs(exposure_time - 1.0/closest_den) < 0.01:  # Allow small tolerance
-                        return f"1/{closest_den}"
-                # For >= 1 second, show as decimal
-                elif exposure_time >= 1:
-                    if exposure_time == int(exposure_time):
-                        return f"{int(exposure_time)}"
-                    return f"{exposure_time:.3f}"
+            if result == int(result):
+                return str(int(result))
+            if result < 1:
+                return f"{result:.3f}"
+            if result < 100:
+                return f"{result:.1f}"
             return str(result)
-        
-        # ApertureValue - APEX units, convert to f-number format
-        if tag_key == 'ApertureValue':
-            # Handle tuple (rational) format
-            if isinstance(value, tuple) and len(value) == 2:
-                num, den = value
-            # Handle string "num den" format
-            elif isinstance(value, str):
-                parts = value.split()
-                if len(parts) == 2:
-                    try:
-                        num, den = int(parts[0]), int(parts[1])
-                    except:
-                        return str(value)
-                else:
-                    return str(value)
-            else:
-                # Not a tuple and not a string - might be already processed or single numeric value
-                # Try to use it directly as APEX value
-                try:
-                    apex_value = float(value)
-                    import math
-                    if apex_value != 0:
-                        f_number = math.sqrt(2 ** apex_value)
-                        return f"{f_number:.1f}"
-                except:
-                    pass
-                return str(value)
-            
-            # num and den should be defined now
-            if den == 0:
-                return str(value)
-            result = num / den
-            # ApertureValue is in APEX: value = log2(f_number^2)
-            # So: f_number = sqrt(2^value)
-            import math
-            if result != 0:
-                f_number = math.sqrt(2 ** result)
-                # Round to 1 decimal place for f-numbers
-                return f"{f_number:.1f}"
-            return str(result)
-        
-        # MaxApertureValue - APEX units, convert to f-number format (same as ApertureValue)
-        if tag_key == 'MaxApertureValue':
-            result = num / den
-            # MaxApertureValue is in APEX: value = log2(f_number^2)
-            # So: f_number = sqrt(2^value)
-            import math
-            if result != 0:
-                f_number = math.sqrt(2 ** result)
-                # Round to 1 decimal place for f-numbers to standard format
-                return f"{f_number:.1f}"
-            return str(result)
-        
-        # Default rational formatting with full precision
-        result = num / den
-        return str(result)
+        try:
+            num_value = float(value)
+        except (ValueError, TypeError):
+            return str(value)
+        if num_value == int(num_value):
+            return str(int(num_value))
+        return str(num_value)
     
     # List values - format as space-separated
     if isinstance(value, (list, tuple)):
@@ -1453,4 +1386,3 @@ def format_exif_value(tag_name: str, value: Any, context: Optional[Dict[str, Any
     
     # Default: convert to string
     return str(value)
-

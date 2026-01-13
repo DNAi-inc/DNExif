@@ -476,19 +476,53 @@ class MakerNoteValueDecoder:
                     }
             
             # Canon ShotInfo sub-IFD enums (tag 0x0004)
+            # Note: Most ShotInfo tags are numeric values, not enums
+            # Only specific tags have enum mappings
             elif parent_tag_name and 'CanonShotInfo' in parent_tag_name:
-                if tag_id == 0x0001:  # AutoExposureBracketing
+                if tag_id == 0x0007:  # WhiteBalance
                     return {
+                        0: "Auto",
+                        1: "Daylight",
+                        2: "Cloudy",
+                        3: "Tungsten",
+                        4: "Fluorescent",
+                        5: "Flash",
+                        6: "Custom",
+                        7: "Black & White",
+                        8: "Shade",
+                        9: "Manual Temperature (Kelvin)",
+                        10: "PC Set1",
+                        11: "PC Set2",
+                        12: "PC Set3",
+                        14: "Fluorescent H (Daylight)",
+                        15: "Custom 1",
+                        16: "Custom 2",
+                        17: "Underwater",
+                    }
+                elif tag_id == 0x0008:  # SlowShutter
+                    return {
+                        -1: "n/a",
                         0: "Off",
-                        1: "On",
+                        1: "Night Scene",
+                        2: "On",
+                        3: "None",
                     }
-                elif tag_id == 0x0002:  # AEBSequence
+                # AutoISO (0x0001), BaseISO (0x0002), etc. are numeric - no enum mapping
+                return None
+
+            # Canon AFInfo2 SerialData enums (tag 0x0026)
+            elif parent_tag_name and 'CanonAFInfo2' in parent_tag_name:
+                if tag_id == 0x0001:  # AFAreaMode
                     return {
-                        0: "0, -, +",
-                        1: "-, 0, +",
-                        2: "-, +, 0",
+                        0: "Off (Manual Focus)",
+                        1: "Single-point AF",
+                        2: "Dynamic AF (9 points)",
+                        3: "Dynamic AF (21 points)",
+                        4: "Auto",
+                        5: "Zone AF",
+                        6: "Face Detection AF",
                     }
-            
+
             # Canon ImageType (tag 0x0006)
             if tag_id == 0x0006:
                 return {

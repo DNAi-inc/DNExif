@@ -14,7 +14,7 @@ Copyright 2025 DNAi inc.
 """
 
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import struct
 
 from dnexif.exceptions import MetadataWriteError
@@ -40,20 +40,22 @@ class TGAWriter:
         if len(file_data) < 18:
             raise MetadataWriteError("Invalid TGA file (too small)")
 
-        title_value = (
-            metadata.get('XMP:Title')
-            or metadata.get('EXIF:Artist')
+        author_value = (
+            metadata.get('EXIF:Artist')
             or metadata.get('TGA:AuthorName')
-            or metadata.get('Title')
             or metadata.get('Artist')
         )
+        title_value = (
+            metadata.get('XMP:Title')
+            or metadata.get('Title')
+        )
 
-        if not title_value:
-            raise MetadataWriteError("No supported TGA metadata fields provided (expected XMP:Title)")
+        if not author_value and not title_value:
+            raise MetadataWriteError("No supported TGA metadata fields provided (expected EXIF:Artist or XMP:Title)")
 
         base_data = self._strip_existing_extension(file_data)
         extension_offset = len(base_data)
-        extension_area = self._build_extension_area(title_value, metadata)
+        extension_area = self._build_extension_area(author_value or title_value, title_value, metadata)
 
         footer = struct.pack('<I', extension_offset)
         footer += struct.pack('<I', 0)  # Developer area offset not used
@@ -82,7 +84,7 @@ class TGAWriter:
 
         return bytearray(file_data)
 
-    def _build_extension_area(self, title_value: str, metadata: Dict[str, Any]) -> bytes:
+    def _build_extension_area(self, author_value: str, title_value: Optional[str], metadata: Dict[str, Any]) -> bytes:
         """
         Construct a TGA 2.0 extension area populated with author/comments.
         """
@@ -92,7 +94,7 @@ class TGAWriter:
         data_offset = 2  # Skip size field
 
         # Author name (41 bytes)
-        self._write_fixed_field(area, data_offset, 41, title_value)
+        self._write_fixed_field(area, data_offset, 41, author_value)
 
         # Comments (4 lines of 81 bytes each)
         comments_values = metadata.get('TGA:Comments')
@@ -104,7 +106,10 @@ class TGAWriter:
             comment_lines = []
 
         if not comment_lines:
-            comment_lines = [title_value]
+            if title_value:
+                comment_lines = [title_value]
+            else:
+                comment_lines = [author_value]
 
         comments_offset = data_offset + 41
         for i in range(4):
@@ -123,4 +128,3 @@ class TGAWriter:
         truncated = encoded[:length]
         padded = truncated + b'\x00' * (length - len(truncated))
         buffer[offset:offset+length] = padded
-

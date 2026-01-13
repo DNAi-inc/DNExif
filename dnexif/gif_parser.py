@@ -292,11 +292,17 @@ class GIFParser:
                         break
                     app_identifier = data[offset:offset + block_size]
                     offset += block_size
+                    if app_identifier == self.XMP_IDENTIFIER:
+                        xmp_packet, offset = self._read_sub_blocks_with_sizes(data, offset)
+                        if xmp_packet is None:
+                            break
+                        if b'<?xpacket' in xmp_packet or b'<x:xmpmeta' in xmp_packet:
+                            return xmp_packet
+                        sub_blocks, _ = self._read_sub_blocks(data, offset)
+                        return sub_blocks
                     sub_blocks, offset = self._read_sub_blocks(data, offset)
                     if sub_blocks is None:
                         break
-                    if app_identifier == self.XMP_IDENTIFIER:
-                        return sub_blocks
                 elif label == self.GRAPHIC_CONTROL_EXTENSION:
                     offset = self._skip_fixed_block(data, offset)
                 elif label in (self.PLAIN_TEXT_EXTENSION, self.COMMENT_EXTENSION):
@@ -321,6 +327,21 @@ class GIFParser:
                 return bytes(payload), offset
             if offset + size > len(data):
                 return None, offset
+            payload.extend(data[offset:offset + size])
+            offset += size
+        return None, offset
+
+    def _read_sub_blocks_with_sizes(self, data: bytes, offset: int) -> Tuple[Optional[bytes], int]:
+        """Read GIF sub-blocks and include size bytes in the returned payload."""
+        payload = bytearray()
+        while offset < len(data):
+            size = data[offset]
+            offset += 1
+            if size == 0:
+                return bytes(payload), offset
+            if offset + size > len(data):
+                return None, offset
+            payload.append(size)
             payload.extend(data[offset:offset + size])
             offset += size
         return None, offset
@@ -449,4 +470,3 @@ class GIFParser:
                 break
             offset += block_size
         return offset
-

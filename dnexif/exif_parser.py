@@ -164,12 +164,12 @@ class ExifParser:
                 break
             elif marker >= 0xE0 and marker <= 0xEF:  # APP segments
                 length = struct.unpack('>H', self.file_data[offset + 2:offset + 4])[0]
-                offset += 4 + length
+                offset += 2 + length
             else:
                 # Skip other segments
                 if offset + 2 < len(self.file_data):
                     length = struct.unpack('>H', self.file_data[offset + 2:offset + 4])[0]
-                    offset += 4 + length
+                    offset += 2 + length
                 else:
                     break
         
@@ -424,13 +424,16 @@ class ExifParser:
         """
         # Initialize byte_order_str (used later for File:ExifByteOrder tag)
         byte_order_str = None
+        # Reset RW2 tracking for this parse call
+        self._is_rw2 = False
+        self._rw2_ifd0_offset = None
         
         # Check for special RAW format headers (ORF, RW2, etc.)
         if offset + 4 <= len(self.file_data):
             header_4 = self.file_data[offset:offset + 4]
-            if header_4 in (b'IIRO', b'MMOR'):
+            if header_4 in (b'IIRO', b'MMOR', b'IIRS'):
                 # ORF format: 4-byte header (IIRO or MMOR), then 4-byte IFD offset
-                if header_4 == b'IIRO':
+                if header_4 in (b'IIRO', b'IIRS'):
                     self.endian = '<'  # Little-endian
                     byte_order_str = 'Little-endian (Intel, II)'
                 else:  # MMOR
@@ -455,6 +458,7 @@ class ExifParser:
                 else:  # MMU
                     self.endian = '>'  # Big-endian
                     byte_order_str = 'Big-endian (Motorola, MM)'
+                self._is_rw2 = True
                 
                 # Read IFD offset (at offset + 4)
                 if offset + 8 <= len(self.file_data):
@@ -463,6 +467,7 @@ class ExifParser:
                     # Adjust if needed
                     if first_ifd_offset < offset:
                         first_ifd_offset = offset + first_ifd_offset
+                    self._rw2_ifd0_offset = offset + first_ifd_offset
                 else:
                     raise MetadataReadError("File too short for RW2 header")
             else:
@@ -692,6 +697,37 @@ class ExifParser:
             # Parse main IFD first to get Make tag
             main_ifd_metadata = self._parse_ifd(main_ifd['abs_offset'], offset)
             metadata.update(main_ifd_metadata)
+
+            if self._is_rw2 and self._rw2_ifd0_offset == main_ifd['abs_offset']:
+                for tag_id, tag_name in ((0x013B, "Artist"), (0x8298, "Copyright")):
+                    if tag_name in metadata:
+                        continue
+                    entry_offset = main_ifd['abs_offset'] + 2
+                    num_entries = struct.unpack(f'{self.endian}H', 
+                                               self.file_data[main_ifd['abs_offset']:main_ifd['abs_offset'] + 2])[0]
+                    for _ in range(num_entries):
+                        if entry_offset + 12 > len(self.file_data):
+                            break
+                        entry_tag_id, tag_type, count, value_offset = struct.unpack(
+                            f'{self.endian}HHI4s',
+                            self.file_data[entry_offset:entry_offset + 12]
+                        )
+                        if entry_tag_id == tag_id:
+                            if self.endian == '<':
+                                value_offset_int = struct.unpack('<I', value_offset)[0]
+                            else:
+                                value_offset_int = struct.unpack('>I', value_offset)[0]
+                            tag_value = self._read_tag_value(
+                                tag_type,
+                                count,
+                                value_offset_int,
+                                entry_offset + 8,
+                                offset
+                            )
+                            if tag_value is not None:
+                                metadata[tag_name] = tag_value
+                            break
+                        entry_offset += 12
             
             # Check if this is a MEF file (Mamiya format)
             # For MEF files, Standard format uses the first IFD for ImageWidth/ImageHeight, not the largest
@@ -1582,7 +1618,15 @@ class ExifParser:
             self.file_data[ifd_offset:ifd_offset + 2]
         )[0]
         
-        if num_entries == 0 or num_entries > 1000:  # Sanity check
+        if num_entries == 0:
+            return None
+
+        # Allow large IFDs in RAW formats if the entry area fits in the file.
+        # Some NEF/ERF files have very large directory entry counts.
+        max_entries = 20000
+        if num_entries > max_entries:
+            return None
+        if ifd_offset + 2 + (num_entries * 12) > len(self.file_data):
             return None
         
         subfile_type = None
@@ -1657,6 +1701,10 @@ class ExifParser:
         # Build 1678: Ensure struct and EXIF_TAG_NAMES are available (fixes UnboundLocalError)
         import struct
         from dnexif.exif_tags import EXIF_TAG_NAMES
+        try:
+            from dnexif.exif_tags_manufacturer import PANASONIC_RW2_IFD_TAGS
+        except ImportError:
+            PANASONIC_RW2_IFD_TAGS = {}
         
         metadata = {}
         # Store parent metadata for MakerNote parsing
@@ -1755,6 +1803,9 @@ class ExifParser:
             
             # Get tag name
             tag_name = EXIF_TAG_NAMES.get(tag_id, f"Unknown_{tag_id:04X}")
+            if (self._is_rw2 and self._rw2_ifd0_offset == ifd_offset and
+                    tag_id in PANASONIC_RW2_IFD_TAGS):
+                tag_name = PANASONIC_RW2_IFD_TAGS[tag_id]
             
             # CRITICAL: For Leaf tags (0x8000-0x8070), try multiple offset strategies
             # Leaf tags in MOS format may use different offset calculations
@@ -1961,6 +2012,15 @@ class ExifParser:
                     entry_offset + 8,
                     base_offset
                 )
+
+            if self._is_rw2 and self._rw2_ifd0_offset == ifd_offset:
+                if tag_name == "PanasonicRawVersion" and isinstance(tag_value, (bytes, bytearray)):
+                    try:
+                        tag_value = tag_value.decode('ascii', errors='replace').rstrip('\x00')
+                    except Exception:
+                        pass
+                elif tag_name == "Gamma" and isinstance(tag_value, int):
+                    tag_value = tag_value / 256.0
             
             # Don't overwrite standard tags (0x0100-0x01FF) with custom tags (0x7000+) that have the same name
             # This prevents tags like 0x7000 (mapped to "ImageWidth") from overwriting the correct 0x0100 (ImageWidth)
@@ -3223,6 +3283,9 @@ class ExifParser:
                                     endian=self.endian
                                 )
                                 makernote_data = makernote_parser.parse()
+                                if (not makernote_data and maker.upper() in ('SONY', 'SONY CORPORATION') and
+                                        isinstance(tag_value, bytes) and len(tag_value) > 8):
+                                    makernote_data = self._parse_sony_makernote_bytes(tag_value)
                             except Exception as parse_ex:
                                 # If parsing with offset fails, try using tag_value bytes directly if available
                                 # This handles cases where the data is already read
@@ -3289,6 +3352,10 @@ class ExifParser:
                                             except Exception:
                                                 continue
                                     
+                                    # If still no data and tag_value is bytes, try parsing direct IFD bytes
+                                    if not makernote_data and isinstance(tag_value, bytes) and len(tag_value) > 8:
+                                        makernote_data = self._parse_sony_makernote_bytes(tag_value)
+
                                     # If still no data and tag_value is bytes, try searching for it in file
                                     if not makernote_data and isinstance(tag_value, bytes) and len(tag_value) > 20:
                                         # Search for tag_value pattern in file_data (first 2MB)
@@ -3600,8 +3667,121 @@ class ExifParser:
                 else:
                     metadata[tag_name] = tag_value
             
+            if tag_name not in metadata:
+                metadata[tag_name] = tag_value
+
             entry_offset += 12
+
+        if self._is_rw2 and self._rw2_ifd0_offset == ifd_offset:
+            for tag_id, tag_name in ((0x013B, "Artist"), (0x8298, "Copyright")):
+                if tag_name in metadata:
+                    continue
+                entry_offset = ifd_offset + 2
+                for _ in range(num_entries):
+                    if entry_offset + 12 > len(self.file_data):
+                        break
+                    entry_tag_id, tag_type, count, value_offset = struct.unpack(
+                        f'{self.endian}HHI4s',
+                        self.file_data[entry_offset:entry_offset + 12]
+                    )
+                    if entry_tag_id == tag_id:
+                        if self.endian == '<':
+                            value_offset_int = struct.unpack('<I', value_offset)[0]
+                        else:
+                            value_offset_int = struct.unpack('>I', value_offset)[0]
+                        tag_value = self._read_tag_value(
+                            tag_type,
+                            count,
+                            value_offset_int,
+                            entry_offset + 8,
+                            base_offset
+                        )
+                        if tag_value is not None:
+                            metadata[tag_name] = tag_value
+                        break
+                    entry_offset += 12
         
+        return metadata
+
+    def _parse_sony_makernote_bytes(self, makernote_bytes: bytes) -> Dict[str, Any]:
+        """
+        Parse Sony MakerNote when the tag payload starts with a raw IFD (no header).
+        """
+        metadata: Dict[str, Any] = {}
+        if not makernote_bytes or len(makernote_bytes) < 8:
+            return metadata
+
+        try:
+            import struct
+            from dnexif.makernote_tags import get_makernote_tag_name
+            from dnexif.makernote_value_decoder import MakerNoteValueDecoder
+
+            def _read_count(endian: str) -> int:
+                return struct.unpack(f'{endian}H', makernote_bytes[0:2])[0]
+
+            endian = self.endian
+            count = _read_count(endian)
+            if not (1 <= count <= 300):
+                alt_endian = '>' if endian == '<' else '<'
+                alt_count = _read_count(alt_endian)
+                if 1 <= alt_count <= 300:
+                    endian = alt_endian
+                    count = alt_count
+                else:
+                    return metadata
+
+            value_decoder = MakerNoteValueDecoder(endian=endian)
+            entry_offset = 2
+            entry_size = 12
+            for _ in range(min(count, 300)):
+                if entry_offset + entry_size > len(makernote_bytes):
+                    break
+
+                tag_id, tag_type, tag_count, tag_value = struct.unpack(
+                    f'{endian}HHI4s',
+                    makernote_bytes[entry_offset:entry_offset + entry_size]
+                )
+
+                if tag_type == 0 or tag_type > 12:
+                    entry_offset += entry_size
+                    continue
+                if tag_id > 0xC000 or tag_count > 1000000:
+                    entry_offset += entry_size
+                    continue
+
+                value = None
+                try:
+                    if tag_count <= 4 and tag_type in (1, 3, 4):
+                        value = value_decoder.decode_sony_value(
+                            tag_id, tag_type, tag_count, makernote_bytes, entry_offset + 8, 0
+                        )
+                    else:
+                        data_offset = struct.unpack(f'{endian}I', tag_value)[0]
+                        if 0 <= data_offset < len(makernote_bytes):
+                            value = value_decoder.decode_sony_value(
+                                tag_id, tag_type, tag_count, makernote_bytes, data_offset, 0
+                            )
+                except Exception:
+                    value = None
+
+                tag_name = get_makernote_tag_name('SONY', tag_id)
+                if tag_name:
+                    if tag_name.startswith('Sony_') and tag_name[5:].startswith('0x'):
+                        tag_name_clean = f"Tag{tag_name[5:]}"
+                    elif tag_name.startswith('Sony_'):
+                        tag_name_clean = tag_name[5:]
+                    elif tag_name.startswith('Sony'):
+                        tag_name_clean = tag_name[4:]
+                    else:
+                        tag_name_clean = tag_name
+                    metadata[f'MakerNotes:{tag_name_clean}'] = value
+                else:
+                    metadata[f'MakerNotes:Tag{tag_id:04X}'] = value
+
+                entry_offset += entry_size
+        except Exception:
+            return {}
+
         return metadata
     
     def _parse_pkts_format(self, pkts_data: bytes, metadata: Dict[str, Any]) -> None:
@@ -4125,4 +4305,3 @@ class ExifParser:
             return data
         
         return None
-

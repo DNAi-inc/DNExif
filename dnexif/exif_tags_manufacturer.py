@@ -1079,3 +1079,43 @@ MANUFACTURER_EXIF_TAGS = {
     0x00FF: "PanasonicWB_RBLevels229",
 }
 
+# Panasonic RW2 IFD0 tags (PanasonicRaw)
+# These are RW2-specific tags stored in the primary IFD and should not use
+# standard TIFF tag names.
+PANASONIC_RW2_IFD_TAGS = {
+    0x0001: "PanasonicRawVersion",
+    0x0002: "SensorWidth",
+    0x0003: "SensorHeight",
+    0x0004: "SensorTopBorder",
+    0x0005: "SensorLeftBorder",
+    0x0006: "SensorBottomBorder",
+    0x0007: "SensorRightBorder",
+    0x0008: "SamplesPerPixel",
+    0x0009: "CFAPattern",
+    0x000A: "BitsPerSample",
+    0x000B: "Compression",
+    0x000D: "LinearityLimitRed",
+    0x000E: "LinearityLimitGreen",
+    0x000F: "LinearityLimitBlue",
+    0x0010: "ISO",
+    0x0017: "HighISOMultiplierRed",
+    0x0018: "HighISOMultiplierGreen",
+    0x0019: "HighISOMultiplierBlue",
+    0x001A: "NoiseReductionParams",
+    0x001B: "BlackLevelRed",
+    0x001C: "BlackLevelGreen",
+    0x001D: "BlackLevelBlue",
+    0x001E: "WBRedLevel",
+    0x0024: "WBGreenLevel",
+    0x0025: "WBBlueLevel",
+    0x0026: "RawFormat",
+    0x0027: "XResolution",
+    0x0029: "YResolution",
+    0x002A: "ResolutionUnit",
+    0x002B: "Software",
+    0x002C: "ModifyDate",
+    0x002D: "YCbCrPositioning",
+    0x002E: "JpgFromRaw",
+    0x0118: "RawDataOffset",
+    0x011C: "Gamma",
+}

@@ -113,6 +113,9 @@ class VideoWriter:
                 k: v for k, v in metadata.items()
                 if k.startswith('XMP:')
             }
+            artist_value = metadata.get('EXIF:Artist') or metadata.get('Artist')
+            if artist_value and 'XMP:Creator' not in xmp_metadata:
+                xmp_metadata['XMP:Creator'] = artist_value
             
             # Extract AudioKeys metadata (tags with AudioKeys: prefix)
             audio_keys_metadata = {
@@ -131,6 +134,14 @@ class VideoWriter:
                 k.replace('QuickTime:', ''): v for k, v in metadata.items()
                 if k.startswith('QuickTime:') and not k.startswith('QuickTime:Track')
             }
+            if artist_value and 'Artist' not in quicktime_metadata:
+                quicktime_metadata['Artist'] = artist_value
+            title_value = metadata.get('XMP:Title') or metadata.get('Title')
+            if title_value and 'Title' not in quicktime_metadata:
+                quicktime_metadata['Title'] = title_value
+            copyright_value = metadata.get('EXIF:Copyright') or metadata.get('Copyright')
+            if copyright_value and 'Copyright' not in quicktime_metadata:
+                quicktime_metadata['Copyright'] = copyright_value
             
             # Apply QuickTimeHandler option if set
             if self.quicktime_handler:
@@ -171,12 +182,13 @@ class VideoWriter:
                     f.write(updated_data)
                 return
             
-            # If we have QuickTime tags, write them to ilst atom
+            # If we have QuickTime tags, attempt to write them (fallback to XMP if needed)
             if has_quicktime_tags:
-                updated_data = self._inject_quicktime_tags(file_data, quicktime_metadata)
-                with open(output_path, 'wb') as f:
-                    f.write(updated_data)
-                return
+                file_data = self._inject_quicktime_tags(file_data, quicktime_metadata)
+                if not xmp_metadata:
+                    with open(output_path, 'wb') as f:
+                        f.write(file_data)
+                    return
             
             if xmp_metadata:
                 merged_metadata = self._merge_with_existing_xmp(file_data, xmp_metadata)
@@ -240,9 +252,14 @@ class VideoWriter:
             or metadata.get('Video:AVI:Title')
             or metadata.get('Title')
         )
+        artist_value = (
+            metadata.get('EXIF:Artist')
+            or metadata.get('Video:AVI:Artist')
+            or metadata.get('Artist')
+        )
         
-        if not title_value:
-            raise MetadataWriteError("No supported AVI metadata fields provided (expected XMP:Title)")
+        if not title_value and not artist_value:
+            raise MetadataWriteError("No supported AVI metadata fields provided (expected XMP:Title or EXIF:Artist)")
         
         with open(file_path, 'rb') as f:
             original_data = f.read()
@@ -261,7 +278,10 @@ class VideoWriter:
             return entry
         
         info_entries = []
-        info_entries.append(_build_info_entry(b'INAM', title_value))
+        if title_value:
+            info_entries.append(_build_info_entry(b'INAM', title_value))
+        if artist_value:
+            info_entries.append(_build_info_entry(b'IART', str(artist_value)))
         info_payload = b'INFO' + b''.join(info_entries)
         info_chunk = b'LIST' + struct.pack('<I', len(info_payload)) + info_payload
         if len(info_payload) % 2:
@@ -328,9 +348,14 @@ class VideoWriter:
             or metadata.get('Video:Matroska:Title')
             or metadata.get('Title')
         )
+        artist_value = (
+            metadata.get('EXIF:Artist')
+            or metadata.get('Video:Matroska:Artist')
+            or metadata.get('Artist')
+        )
         
-        if not title_value:
-            raise MetadataWriteError("No supported Matroska metadata fields provided (expected XMP:Title)")
+        if not title_value and not artist_value:
+            raise MetadataWriteError("No supported Matroska metadata fields provided (expected XMP:Title or EXIF:Artist)")
         
         try:
             with open(file_path, 'rb') as f:
@@ -354,9 +379,14 @@ class VideoWriter:
             simple_tag_elements = []
             
             # 1. TITLE tag
-            title_bytes = title_value.encode('utf-8')
-            title_simple_tag = self._build_simple_tag('TITLE', title_bytes)
-            simple_tag_elements.append(title_simple_tag)
+            if title_value:
+                title_bytes = title_value.encode('utf-8')
+                title_simple_tag = self._build_simple_tag('TITLE', title_bytes)
+                simple_tag_elements.append(title_simple_tag)
+            if artist_value:
+                artist_bytes = str(artist_value).encode('utf-8')
+                artist_simple_tag = self._build_simple_tag('ARTIST', artist_bytes)
+                simple_tag_elements.append(artist_simple_tag)
             
             # 2. PROCESSING_SOFTWARE tag (always added to mark file as processed by DNExif)
             processing_software = 'DNExif'
@@ -381,11 +411,9 @@ class VideoWriter:
             tags_size = self._encode_ebml_size(len(tags_content))
             tags_element = tags_id + tags_size + tags_content
             
-            # Append Tags to file
-            # In a full implementation, we'd insert this in the Segment, but appending works for many players
+            updated_data = self._insert_matroska_tags(original_data, tags_element)
             with open(output_path, 'wb') as f:
-                f.write(original_data)
-                f.write(tags_element)
+                f.write(updated_data)
                 
         except Exception as e:
             if isinstance(e, MetadataWriteError):
@@ -423,6 +451,110 @@ class VideoWriter:
         simple_tag_element = simple_tag_id + simple_tag_size + simple_tag_content
         
         return simple_tag_element
+
+    def _insert_matroska_tags(self, file_data: bytes, tags_element: bytes) -> bytes:
+        def _read_ebml_id(data: bytes, offset: int) -> Optional[Tuple[int, int]]:
+            if offset >= len(data):
+                return None
+            first = data[offset]
+            mask = 0x80
+            length = 1
+            while length <= 4 and not (first & mask):
+                mask >>= 1
+                length += 1
+            if length > 4 or offset + length > len(data):
+                return None
+            value = 0
+            for i in range(length):
+                value = (value << 8) | data[offset + i]
+            return value, length
+
+        def _read_ebml_size(data: bytes, offset: int) -> Optional[Tuple[int, int, bool]]:
+            if offset >= len(data):
+                return None
+            first = data[offset]
+            mask = 0x80
+            length = 1
+            while length <= 8 and not (first & mask):
+                mask >>= 1
+                length += 1
+            if length > 8 or offset + length > len(data):
+                return None
+            value = first & (mask - 1)
+            for i in range(1, length):
+                value = (value << 8) | data[offset + i]
+            unknown = value == (1 << (7 * length)) - 1
+            return value, length, unknown
+
+        def _encode_ebml_size_fixed(size: int, length: int) -> bytes:
+            if length < 1 or length > 8:
+                raise MetadataWriteError("Invalid EBML size length")
+            max_value = (1 << (7 * length)) - 1
+            if size > max_value:
+                raise MetadataWriteError("EBML size too large for fixed length")
+            value = size
+            out = bytearray(length)
+            for i in range(length - 1, -1, -1):
+                out[i] = value & 0xFF
+                value >>= 8
+            out[0] |= 1 << (8 - length)
+            return bytes(out)
+
+        segment_id = 0x18538067
+        cluster_id = 0x1F43B675
+
+        offset = 0
+        data_len = len(file_data)
+        while offset + 4 < data_len:
+            id_info = _read_ebml_id(file_data, offset)
+            if not id_info:
+                break
+            elem_id, id_len = id_info
+            size_info = _read_ebml_size(file_data, offset + id_len)
+            if not size_info:
+                break
+            elem_size, size_len, unknown_size = size_info
+            header_len = id_len + size_len
+            payload_start = offset + header_len
+            if elem_id == segment_id:
+                if unknown_size:
+                    segment_end = data_len
+                else:
+                    segment_end = payload_start + elem_size
+                    if segment_end > data_len:
+                        segment_end = data_len
+                insert_at = segment_end
+                scan = payload_start
+                while scan + 4 <= segment_end:
+                    inner_id_info = _read_ebml_id(file_data, scan)
+                    if not inner_id_info:
+                        break
+                    inner_id, inner_id_len = inner_id_info
+                    inner_size_info = _read_ebml_size(file_data, scan + inner_id_len)
+                    if not inner_size_info:
+                        break
+                    inner_size, inner_size_len, inner_unknown = inner_size_info
+                    inner_header = inner_id_len + inner_size_len
+                    inner_payload_start = scan + inner_header
+                    if inner_id == cluster_id:
+                        insert_at = scan
+                        break
+                    if inner_unknown:
+                        break
+                    scan = inner_payload_start + inner_size
+                new_payload = file_data[payload_start:insert_at] + tags_element + file_data[insert_at:segment_end]
+                if not unknown_size:
+                    new_size = len(new_payload)
+                    size_bytes = _encode_ebml_size_fixed(new_size, size_len)
+                else:
+                    size_bytes = file_data[offset + id_len:offset + id_len + size_len]
+                header = file_data[offset:offset + id_len] + size_bytes
+                return file_data[:offset] + header + new_payload + file_data[segment_end:]
+            if unknown_size:
+                break
+            offset = payload_start + elem_size
+
+        return file_data
     
     @staticmethod
     def _encode_ebml_size(size: int) -> bytes:
@@ -554,26 +686,66 @@ class VideoWriter:
         Returns:
             Updated file data with QuickTime tags injected
         """
-        # For now, append QuickTime tags as a note
-        # Full implementation would require parsing and updating the ilst atom structure
-        # This is a basic implementation that acknowledges QuickTime tags
-        cleaned = bytearray(file_data)
-        
-        # Apply padding if QuickTimePad is set
-        if self.quicktime_pad > 0:
-            # Pad the entire file data to QuickTimePad boundary
-            cleaned = bytearray(self._pad_atom(bytes(cleaned)))
-        
-        # Note: Full implementation would:
-        # 1. Find 'meta' atom in 'moov' atom
-        # 2. Find or create 'ilst' atom in 'meta' atom
-        # 3. Add QuickTime tag items to 'ilst' atom
-        # 4. Update atom sizes accordingly
-        # 5. Apply QuickTimePad padding to atoms
-        
-        # For now, we acknowledge the tags and return the file data
-        # QuickTime tags are detected and ready for ilst atom writing
-        return bytes(cleaned)
+        def _build_data_atom(text_value: str) -> bytes:
+            payload = text_value.encode('utf-8', errors='replace')
+            data_header = struct.pack('>II', 1, 0)  # type=1 (UTF-8), locale=0
+            size = 8 + len(data_header) + len(payload)
+            return struct.pack('>I4s', size, b'data') + data_header + payload
+
+        def _build_ilst_item(item_key: bytes, text_value: str) -> bytes:
+            data_atom = _build_data_atom(text_value)
+            size = 8 + len(data_atom)
+            return struct.pack('>I4s', size, item_key) + data_atom
+
+        items = []
+        title_value = quicktime_metadata.get('Title')
+        artist_value = quicktime_metadata.get('Artist')
+        copyright_value = quicktime_metadata.get('Copyright')
+
+        if title_value:
+            items.append(_build_ilst_item(b'\xa9nam', str(title_value)))
+        if artist_value:
+            items.append(_build_ilst_item(b'\xa9ART', str(artist_value)))
+        if copyright_value:
+            items.append(_build_ilst_item(b'\xa9cpr', str(copyright_value)))
+
+        if not items:
+            return file_data
+
+        ilst_payload = b''.join(items)
+        ilst_atom = struct.pack('>I4s', 8 + len(ilst_payload), b'ilst') + ilst_payload
+        meta_payload = b'\x00\x00\x00\x00' + ilst_atom  # version/flags + ilst
+        meta_atom = struct.pack('>I4s', 8 + len(meta_payload), b'meta') + meta_payload
+        udta_atom = struct.pack('>I4s', 8 + len(meta_atom), b'udta') + meta_atom
+
+        offset = 0
+        length = len(file_data)
+        while offset + 8 <= length:
+            size, header = self._read_atom_size(file_data, offset)
+            if size <= 0 or offset + size > length:
+                break
+            atom_type = file_data[offset + 4:offset + 8]
+            if atom_type == b'moov':
+                payload_start = offset + header
+                payload_end = offset + size
+                moov_payload = file_data[payload_start:payload_end] + udta_atom
+                new_size = header + len(moov_payload)
+                if header == 16:
+                    new_header = bytearray(file_data[offset:offset + header])
+                    new_header[0:4] = struct.pack('>I', 1)
+                    new_header[8:16] = struct.pack('>Q', new_size)
+                else:
+                    new_header = bytearray(file_data[offset:offset + header])
+                    new_header[0:4] = struct.pack('>I', new_size)
+                return b''.join([
+                    file_data[:offset],
+                    bytes(new_header),
+                    moov_payload,
+                    file_data[payload_end:]
+                ])
+            offset += size
+
+        return file_data
     
     def _inject_quicktime_keys(self, file_data: bytes, quicktime_keys_metadata: Dict[str, Any]) -> bytes:
         """
@@ -683,4 +855,3 @@ class VideoWriter:
             size = struct.unpack('>Q', data[offset+8:offset+16])[0]
             return size, 16
         return size, 8
-

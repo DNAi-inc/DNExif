@@ -111,9 +111,15 @@ class AudioWriter:
             or metadata.get('Audio:MP3:Title')
             or metadata.get('Title')
         )
+        artist_value = (
+            metadata.get('EXIF:Artist')
+            or metadata.get('ID3:Artist')
+            or metadata.get('Audio:MP3:Artist')
+            or metadata.get('Artist')
+        )
         
-        if not title_value:
-            raise MetadataWriteError("No supported MP3 metadata fields provided (expected XMP:Title)")
+        if not title_value and not artist_value:
+            raise MetadataWriteError("No supported MP3 metadata fields provided (expected XMP:Title or EXIF:Artist)")
         
         with open(file_path, 'rb') as f:
             original_data = f.read()
@@ -123,9 +129,15 @@ class AudioWriter:
         
         audio_payload = self._strip_existing_id3v2(original_data)
         
-        # Build ID3v2.3 tag with TIT2 frame
-        frame_payload = self._build_text_frame_payload(title_value)
-        frame_body = b'TIT2' + struct.pack('>I', len(frame_payload)) + b'\x00\x00' + frame_payload
+        # Build ID3v2.3 tag with TIT2/TPE1 frames
+        frames = []
+        if title_value:
+            frame_payload = self._build_text_frame_payload(title_value)
+            frames.append(b'TIT2' + struct.pack('>I', len(frame_payload)) + b'\x00\x00' + frame_payload)
+        if artist_value:
+            frame_payload = self._build_text_frame_payload(str(artist_value))
+            frames.append(b'TPE1' + struct.pack('>I', len(frame_payload)) + b'\x00\x00' + frame_payload)
+        frame_body = b''.join(frames)
         tag_size = len(frame_body)
         tag_header = b'ID3' + bytes([3, 0, 0]) + self._int_to_synchsafe(tag_size)
         tag_data = tag_header + frame_body
@@ -148,9 +160,14 @@ class AudioWriter:
             or metadata.get('Audio:WAV:Title')
             or metadata.get('Title')
         )
+        artist_value = (
+            metadata.get('EXIF:Artist')
+            or metadata.get('Audio:WAV:Artist')
+            or metadata.get('Artist')
+        )
         
-        if not title_value:
-            raise MetadataWriteError("No supported WAV metadata fields provided (expected XMP:Title)")
+        if not title_value and not artist_value:
+            raise MetadataWriteError("No supported WAV metadata fields provided (expected XMP:Title or EXIF:Artist)")
         
         with open(file_path, 'rb') as f:
             original_data = f.read()
@@ -169,7 +186,10 @@ class AudioWriter:
             return entry
         
         info_entries = []
-        info_entries.append(_build_info_entry(b'INAM', title_value))
+        if title_value:
+            info_entries.append(_build_info_entry(b'INAM', title_value))
+        if artist_value:
+            info_entries.append(_build_info_entry(b'IART', str(artist_value)))
         info_payload = b'INFO' + b''.join(info_entries)
         info_chunk = b'LIST' + struct.pack('<I', len(info_payload)) + info_payload
         if len(info_payload) % 2:
@@ -229,15 +249,25 @@ class AudioWriter:
             or metadata.get('Audio:FLAC:Title')
             or metadata.get('Title')
         )
+        artist_value = (
+            metadata.get('EXIF:Artist')
+            or metadata.get('Audio:FLAC:Artist')
+            or metadata.get('Artist')
+        )
         
-        if not title_value:
-            raise MetadataWriteError("No supported FLAC metadata fields provided (expected XMP:Title)")
+        if not title_value and not artist_value:
+            raise MetadataWriteError("No supported FLAC metadata fields provided (expected XMP:Title or EXIF:Artist)")
         
         original_data = Path(file_path).read_bytes()
         if not original_data.startswith(b'fLaC'):
             raise MetadataWriteError("Invalid FLAC file")
         
-        vorbis_block = self._build_vorbis_comment_block({'TITLE': title_value})
+        vorbis_fields = {}
+        if title_value:
+            vorbis_fields['TITLE'] = title_value
+        if artist_value:
+            vorbis_fields['ARTIST'] = str(artist_value)
+        vorbis_block = self._build_vorbis_comment_block(vorbis_fields)
         
         # Parse metadata blocks
         offset = 4
@@ -325,9 +355,15 @@ class AudioWriter:
             or metadata.get('Audio:OPUS:Title')
             or metadata.get('Title')
         )
+        artist_value = (
+            metadata.get('EXIF:Artist')
+            or metadata.get('Audio:OGG:Artist')
+            or metadata.get('Audio:OPUS:Artist')
+            or metadata.get('Artist')
+        )
         
-        if not title_value:
-            raise MetadataWriteError("No supported OGG/Opus metadata fields provided (expected XMP:Title)")
+        if not title_value and not artist_value:
+            raise MetadataWriteError("No supported OGG/Opus metadata fields provided (expected XMP:Title or EXIF:Artist)")
         
         original_data = Path(file_path).read_bytes()
         if not original_data.startswith(b'OggS'):
@@ -337,8 +373,13 @@ class AudioWriter:
         is_opus = b'OpusHead' in header_window or file_path.lower().endswith('.opus')
         signature = b'OpusTags' if is_opus else b'\x03vorbis'
         
+        vorbis_fields = {}
+        if title_value:
+            vorbis_fields['TITLE'] = title_value
+        if artist_value:
+            vorbis_fields['ARTIST'] = str(artist_value)
         vorbis_block = self._build_vorbis_comment_block(
-            {'TITLE': title_value},
+            vorbis_fields,
             include_framing=not is_opus
         )
         comment_packet = signature + vorbis_block
@@ -536,9 +577,14 @@ class AudioWriter:
             or metadata.get('Audio:WMA:Title')
             or metadata.get('Title')
         )
+        artist_value = (
+            metadata.get('EXIF:Artist')
+            or metadata.get('Audio:WMA:Artist')
+            or metadata.get('Artist')
+        )
         
-        if not title_value:
-            raise MetadataWriteError("No supported WMA metadata fields provided (expected XMP:Title)")
+        if not title_value and not artist_value:
+            raise MetadataWriteError("No supported WMA metadata fields provided (expected XMP:Title or EXIF:Artist)")
         
         try:
             with open(file_path, 'rb') as f:
@@ -549,79 +595,126 @@ class AudioWriter:
             if len(original_data) < 16 or original_data[:16] != asf_header_guid:
                 raise MetadataWriteError("Invalid WMA/ASF file (missing ASF header)")
             
+            # ASF GUIDs are stored with the first three fields in little-endian order.
+            # Content Description Object GUID: 75B22633-668E-11CF-A6D9-00AA0062CE6C
+            content_desc_guid = bytes.fromhex('3326b2758e66cf11a6d900aa0062ce6c')
+            content_desc_guid_legacy = bytes.fromhex('75b22633668e11cfa6d900aa0062ce6c')
             # Extended Content Description Object GUID: 40A4D0D2-07E3-D211-97F0-00A0C95EA850
-            # Stored as: 40 A4 D0 D2 07 E3 D2 11 97 F0 00 A0 C9 5E A8 50 (big-endian)
-            ext_content_desc_guid = bytes.fromhex('40a4d0d207e3d21197f000a0c95ea850')
+            ext_content_desc_guid = bytes.fromhex('d2d0a440e30711d297f000a0c95ea850')
+            ext_content_desc_guid_legacy = bytes.fromhex('40a4d0d207e3d21197f000a0c95ea850')
+
+            title_bytes_cd = (title_value if isinstance(title_value, bytes)
+                              else str(title_value).encode('utf-16-le')) if title_value else b''
+            artist_bytes_cd = (artist_value if isinstance(artist_value, bytes)
+                               else str(artist_value).encode('utf-16-le')) if artist_value else b''
+            copyright_value = metadata.get('EXIF:Copyright') or metadata.get('Copyright')
+            copyright_bytes_cd = (copyright_value if isinstance(copyright_value, bytes)
+                                  else str(copyright_value).encode('utf-16-le')) if copyright_value else b''
+            content_desc_payload = (
+                struct.pack('<H', len(title_bytes_cd)) +
+                struct.pack('<H', len(artist_bytes_cd)) +
+                struct.pack('<H', len(copyright_bytes_cd)) +
+                struct.pack('<H', 0) +
+                struct.pack('<H', 0) +
+                title_bytes_cd + artist_bytes_cd + copyright_bytes_cd
+            )
+            content_desc_obj = content_desc_guid + struct.pack('<Q', 24 + len(content_desc_payload)) + content_desc_payload
             
             # Build Extended Content Description Object payload
             # Structure: Descriptor Count (2 bytes) + Descriptors
             # Each Descriptor: Name Length (2) + Name (UTF-16LE) + Value Type (2) + Value Length (2) + Value (UTF-16LE)
-            if isinstance(title_value, bytes):
-                title_bytes = title_value
-            else:
-                title_bytes = str(title_value).encode('utf-16-le')
-            # Use standard ASF tag name "WM/Title"
-            name_bytes = 'WM/Title'.encode('utf-16-le')
+            descriptors = []
+            if title_value:
+                title_bytes = title_value if isinstance(title_value, bytes) else str(title_value).encode('utf-16-le')
+                name_bytes = 'WM/Title'.encode('utf-16-le')
+                descriptor = struct.pack('<H', len(name_bytes)) + name_bytes
+                descriptor += struct.pack('<H', 0)  # Value type: Unicode string
+                descriptor += struct.pack('<H', len(title_bytes)) + title_bytes
+                descriptors.append(descriptor)
+            if artist_value:
+                artist_bytes = artist_value if isinstance(artist_value, bytes) else str(artist_value).encode('utf-16-le')
+                name_bytes = 'WM/Artist'.encode('utf-16-le')
+                descriptor = struct.pack('<H', len(name_bytes)) + name_bytes
+                descriptor += struct.pack('<H', 0)  # Value type: Unicode string
+                descriptor += struct.pack('<H', len(artist_bytes)) + artist_bytes
+                descriptors.append(descriptor)
+                author_name_bytes = 'WM/Author'.encode('utf-16-le')
+                author_descriptor = struct.pack('<H', len(author_name_bytes)) + author_name_bytes
+                author_descriptor += struct.pack('<H', 0)
+                author_descriptor += struct.pack('<H', len(artist_bytes)) + artist_bytes
+                descriptors.append(author_descriptor)
             
-            # Build descriptor: Name Length + Name + Value Type (0=Unicode) + Value Length + Value
-            descriptor = struct.pack('<H', len(name_bytes)) + name_bytes
-            descriptor += struct.pack('<H', 0)  # Value type: Unicode string
-            descriptor += struct.pack('<H', len(title_bytes)) + title_bytes
-            
-            # Build payload: Descriptor Count (1) + Descriptor
-            payload = struct.pack('<H', 1) + descriptor
+            payload = struct.pack('<H', len(descriptors)) + b''.join(descriptors)
             
             # Extended Content Description Object: GUID (16 bytes) + Size (8 bytes) + Payload
             obj_size = 24 + len(payload)
             ext_content_desc_obj = ext_content_desc_guid + struct.pack('<Q', obj_size) + payload
             
-            # Find and replace existing Content Description Object, or insert it
-            # ASF structure: Header Object + other objects
-            # We'll search for the Content Description Object and replace it
-            offset = 0
-            data_len = len(original_data)
-            found = False
-            new_data = bytearray()
-            
-            while offset + 24 <= data_len:
-                # Check for Extended Content Description Object GUID
-                if original_data[offset:offset+16] == ext_content_desc_guid:
-                    # Found existing Extended Content Description Object
-                    obj_size_old = struct.unpack('<Q', original_data[offset+16:offset+24])[0]
-                    # Replace it
-                    new_data.extend(original_data[:offset])
-                    new_data.extend(ext_content_desc_obj)
-                    new_data.extend(original_data[offset+obj_size_old:])
-                    found = True
+            # Rebuild ASF header objects to replace/insert Content Description objects.
+            if len(original_data) < 32:
+                raise MetadataWriteError("Invalid ASF file structure")
+            header_guid = original_data[:16]
+            header_size = struct.unpack('<Q', original_data[16:24])[0]
+            header_obj_count = struct.unpack('<I', original_data[24:28])[0]
+
+            if header_guid != asf_header_guid or header_size < 30 or header_size > len(original_data):
+                raise MetadataWriteError("Invalid ASF header structure")
+
+            # ASF header reserved fields are typically 2 bytes (0x01, 0x02), but
+            # some files appear to use a 4-byte reserved block. Detect which
+            # layout yields a valid first object.
+            def _valid_object_start(offset: int) -> bool:
+                if offset + 24 > header_size:
+                    return False
+                obj_size = struct.unpack('<Q', original_data[offset + 16:offset + 24])[0]
+                return obj_size >= 24 and offset + obj_size <= header_size
+
+            if _valid_object_start(30):
+                reserved = original_data[28:30]
+                obj_offset = 30
+                header_prefix_len = 30
+            elif _valid_object_start(32):
+                reserved = original_data[28:32]
+                obj_offset = 32
+                header_prefix_len = 32
+            else:
+                raise MetadataWriteError("Invalid ASF header object layout")
+
+            header_objects = []
+            found_content = False
+            found_ext = False
+            while obj_offset + 24 <= header_size:
+                obj_guid = original_data[obj_offset:obj_offset + 16]
+                obj_size = struct.unpack('<Q', original_data[obj_offset + 16:obj_offset + 24])[0]
+                if obj_size < 24 or obj_offset + obj_size > header_size:
                     break
-                
-                # Check if this is an ASF object (has GUID + size)
-                # Try to read size
-                try:
-                    obj_size_check = struct.unpack('<Q', original_data[offset+16:offset+24])[0]
-                    if obj_size_check < 24 or offset + obj_size_check > data_len:
-                        # Not a valid object, move forward
-                        offset += 1
-                        continue
-                    # Valid object, skip it
-                    offset += obj_size_check
-                except Exception:
-                    offset += 1
-            
-            if not found:
-                # Extended Content Description Object not found, insert it after Header Object
-                # Header Object size is at offset 16 (8 bytes, little-endian)
-                if len(original_data) >= 24:
-                    header_size = struct.unpack('<Q', original_data[16:24])[0]
-                    # Insert after Header Object
-                    new_data = bytearray(original_data[:header_size])
-                    new_data.extend(ext_content_desc_obj)
-                    new_data.extend(original_data[header_size:])
-                    # Update Header Object size to include new object
-                    new_header_size = header_size + len(ext_content_desc_obj)
-                    new_data[16:24] = struct.pack('<Q', new_header_size)
+                if obj_guid in (content_desc_guid, content_desc_guid_legacy):
+                    header_objects.append(content_desc_obj)
+                    found_content = True
+                elif obj_guid in (ext_content_desc_guid, ext_content_desc_guid_legacy):
+                    header_objects.append(ext_content_desc_obj)
+                    found_ext = True
                 else:
-                    raise MetadataWriteError("Invalid ASF file structure")
+                    header_objects.append(original_data[obj_offset:obj_offset + obj_size])
+                obj_offset += obj_size
+
+            if not found_content:
+                header_objects.append(content_desc_obj)
+            if not found_ext:
+                header_objects.append(ext_content_desc_obj)
+
+            new_header_objects = b''.join(header_objects)
+            new_header_size = header_prefix_len + len(new_header_objects)
+            new_header_count = len(header_objects)
+
+            new_header = (
+                header_guid +
+                struct.pack('<Q', new_header_size) +
+                struct.pack('<I', new_header_count) +
+                reserved +
+                new_header_objects
+            )
+            new_data = bytearray(new_header + original_data[header_size:])
             
             with open(output_path, 'wb') as f:
                 f.write(new_data)
@@ -630,4 +723,3 @@ class AudioWriter:
             if isinstance(e, MetadataWriteError):
                 raise
             raise MetadataWriteError(f"Failed to write WMA file: {str(e)}")
-

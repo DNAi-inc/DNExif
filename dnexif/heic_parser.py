@@ -253,6 +253,24 @@ class HEICParser:
                 if box_type == b'iref':
                     # Item reference box
                     metadata['HEIC:HasItemRef'] = True
+                elif box_type == b'exif':
+                    # EXIF box (4-byte offset + TIFF data)
+                    try:
+                        if len(box_data) >= 4:
+                            exif_offset = struct.unpack('>I', box_data[0:4])[0]
+                            tiff_start = 4 + exif_offset
+                            if 0 <= tiff_start < len(box_data):
+                                exif_data_bytes = box_data[tiff_start:]
+                                from dnexif.exif_parser import ExifParser
+                                exif_parser = ExifParser(file_data=exif_data_bytes)
+                                exif_data = exif_parser.read()
+                                for k, v in exif_data.items():
+                                    if not k.startswith('EXIF:'):
+                                        metadata[f'EXIF:{k}'] = v
+                                    else:
+                                        metadata[k] = v
+                    except Exception:
+                        pass
                 elif box_type == b'iprp':
                     # Item properties box - may contain PLIST data
                     metadata['HEIC:HasItemProperties'] = True
@@ -525,4 +543,3 @@ class HEICParser:
                 i += 2  # Move to next key-value pair
         except Exception:
             pass
-

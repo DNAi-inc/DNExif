@@ -167,13 +167,13 @@ class PSDParser:
                     offset += resource_data_padded
                     
                     # Parse specific resource types
-                    if resource_id == 1033:  # EXIF data
+                    if resource_id in (1033, 1058):  # EXIF data (legacy + standard)
                         try:
                             exif_metadata = self._parse_exif_resource(resource_data)
                             metadata.update(exif_metadata)
                         except Exception:
                             pass
-                    elif resource_id == 1058:  # IPTC data
+                    elif resource_id == 1028:  # IPTC data
                         try:
                             iptc_metadata = self._parse_iptc_resource(resource_data)
                             metadata.update(iptc_metadata)
@@ -207,10 +207,22 @@ class PSDParser:
         """Parse EXIF data from image resource."""
         metadata = {}
         try:
-            # EXIF data in PSD is typically in TIFF format
+            # EXIF data in PSD is typically in TIFF format (resource 1058).
+            exif_data = data
+            if data.startswith(b'\xFF\xE1') and len(data) > 10 and data[4:10] == b'Exif\x00\x00':
+                exif_data = data[10:]
+            elif data.startswith(b'Exif\x00\x00') and len(data) > 6:
+                exif_data = data[6:]
+
             from dnexif.exif_parser import ExifParser
-            # Create a temporary file-like object or parse directly
-            # For now, mark that EXIF was found
+            if exif_data[:2] in (b'II', b'MM'):
+                exif_parser = ExifParser(file_data=exif_data)
+                exif_metadata = exif_parser.read()
+                for key, value in exif_metadata.items():
+                    if key.startswith('EXIF:'):
+                        metadata[key] = value
+                    else:
+                        metadata[f'EXIF:{key}'] = value
             metadata['PSD:HasEXIF'] = True
             metadata['PSD:EXIFSize'] = len(data)
         except Exception:
@@ -234,7 +246,11 @@ class PSDParser:
         metadata = {}
         try:
             # XMP data is typically XML
-            if data.startswith(b'<?xml') or data.startswith(b'<x:xmpmeta'):
+            if data.startswith(b'<?xml') or data.startswith(b'<x:xmpmeta') or b'<?xpacket' in data:
+                from dnexif.xmp_parser import XMPParser
+                xmp_parser = XMPParser(file_data=data)
+                xmp_metadata = xmp_parser.read()
+                metadata.update(xmp_metadata)
                 metadata['PSD:HasXMP'] = True
                 metadata['PSD:XMPSize'] = len(data)
         except Exception:
@@ -283,4 +299,3 @@ class PSDParser:
         except Exception:
             pass
         return metadata
-

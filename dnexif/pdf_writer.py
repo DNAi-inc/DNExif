@@ -62,6 +62,12 @@ class PDFWriter:
             # Separate metadata by type
             xmp_metadata = {}
             doc_info = {}
+
+            artist_value = metadata.get('EXIF:Artist') or metadata.get('Artist')
+            if artist_value:
+                if 'XMP:Creator' not in metadata:
+                    xmp_metadata['XMP:Creator'] = artist_value
+                doc_info.setdefault('Author', artist_value)
             
             for key, value in metadata.items():
                 if key.startswith('XMP:'):
@@ -499,4 +505,3 @@ class _PDFIncrementalUpdater:
         startxref_block = b'startxref\n' + f'{xref_offset}'.encode('ascii') + b'\n%%EOF\n'
 
         return self.pdf_data + bytes(appended) + bytes(xref) + trailer + startxref_block
-

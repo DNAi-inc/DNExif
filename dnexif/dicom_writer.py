@@ -208,9 +208,20 @@ class DICOMWriter:
             # Look for Transfer Syntax UID in File Meta Information (0002,0010)
             parser = DICOMParser(file_data=data)
             metadata = parser.parse()
-            transfer_syntax = metadata.get('DICOM:TransferSyntaxUID', '')
+            # Prefer the numeric tag value to avoid human-readable UID names
+            transfer_syntax = metadata.get('DICOM:(0002,0010)', '')
             if transfer_syntax:
                 return transfer_syntax
+            # Fallback to keyword value (may be a name)
+            transfer_syntax = metadata.get('DICOM:TransferSyntaxUID', '')
+            if transfer_syntax:
+                # Map common names back to UIDs
+                name_to_uid = {
+                    'Explicit VR Big Endian': '1.2.840.10008.1.2.2',
+                    'Explicit VR Little Endian': '1.2.840.10008.1.2.1',
+                    'Implicit VR Little Endian': '1.2.840.10008.1.2',
+                }
+                return name_to_uid.get(str(transfer_syntax), transfer_syntax)
         except:
             pass
         
@@ -254,13 +265,13 @@ class DICOMWriter:
         dicm_signature = b'DICM'
         
         # Build File Meta Information (group 0002)
-        file_meta = self._build_file_meta_information(metadata, is_little_endian, explicit_vr)
+        file_meta = self._build_file_meta_information(metadata, True, True)
         
         # Update FileMetaInfoGroupLength (0002,0000) - must be first element
         # Calculate length of all file meta elements except the group length itself
         file_meta_length = len(file_meta)
         # Find and update the group length element
-        file_meta = self._update_file_meta_group_length(file_meta, file_meta_length, is_little_endian, explicit_vr)
+        file_meta = self._update_file_meta_group_length(file_meta, file_meta_length, True, True)
         
         # Build Data Set (all other groups)
         data_set = self._build_data_set(metadata, is_little_endian, explicit_vr)
@@ -1025,4 +1036,3 @@ class DICOMWriter:
             pass
 
         return result
-

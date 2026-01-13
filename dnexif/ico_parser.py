@@ -18,6 +18,8 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from dnexif.exceptions import MetadataReadError
+from dnexif.exif_parser import ExifParser
+from dnexif.xmp_parser import XMPParser
 
 
 class ICOParser:
@@ -96,6 +98,7 @@ class ICOParser:
             first_image_color_planes = None
             first_image_num_colors = None
             first_image_size_bytes = None
+            png_metadata: Dict[str, Any] = {}
             
             for i in range(image_count):
                 if offset + 16 > len(file_data):
@@ -110,6 +113,7 @@ class ICOParser:
                 bits_per_pixel = struct.unpack('<H', file_data[offset + 6:offset + 8])[0]
                 image_size = struct.unpack('<I', file_data[offset + 8:offset + 12])[0]
                 image_offset = struct.unpack('<I', file_data[offset + 12:offset + 16])[0]
+                image_data = file_data[image_offset:image_offset + image_size]
                 
                 # Handle width/height: 0 means 256
                 actual_width = width if width != 0 else 256
@@ -136,6 +140,23 @@ class ICOParser:
                     'ImageOffset': image_offset,
                     'NumColors': num_colors,
                 })
+
+                if not png_metadata and image_data.startswith(b'\x89PNG\r\n\x1a\n'):
+                    try:
+                        xmp_data = XMPParser(file_data=image_data).read(scan_entire_file=True)
+                        png_metadata.update(xmp_data)
+                    except Exception:
+                        pass
+                    try:
+                        exif_data = ExifParser(file_data=image_data).read()
+                        exif_prefixed = {
+                            f"EXIF:{k}": v
+                            for k, v in exif_data.items()
+                            if not k.startswith('EXIF:') and v and str(v).strip()
+                        }
+                        png_metadata.update(exif_prefixed)
+                    except Exception:
+                        pass
                 
                 # Store first image properties for File tags
                 if i == 0:
@@ -178,8 +199,11 @@ class ICOParser:
                 # the core metadata layer so that all formats use the same logic and
                 # standard precision, including tiny icons like 16x16.
             
+            if png_metadata:
+                for key, value in png_metadata.items():
+                    metadata.setdefault(key, value)
+
             return metadata
             
         except Exception as e:
             raise MetadataReadError(f"Failed to parse ICO/CUR metadata: {str(e)}")
-

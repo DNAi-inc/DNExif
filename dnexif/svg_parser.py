@@ -122,7 +122,10 @@ class SVGParser:
                     if dc_creator is None:
                         dc_creator = rdf_desc.find('.//creator')
                     if dc_creator is not None and dc_creator.text:
-                        metadata['SVG:DCCreator'] = dc_creator.text.strip()
+                        creator_value = dc_creator.text.strip()
+                        metadata['SVG:DCCreator'] = creator_value
+                        metadata.setdefault('EXIF:Artist', creator_value)
+                        metadata.setdefault('Artist', creator_value)
                     
                     # Subject
                     dc_subject = rdf_desc.find('.//dc:subject', dc_namespaces)
@@ -222,4 +225,3 @@ class SVGParser:
         metadata[key] = value
         for alias in aliases:
             metadata[alias] = value
-

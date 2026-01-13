@@ -74,6 +74,9 @@ class GIFWriter:
                 k: v for k, v in metadata.items()
                 if k.startswith('XMP:')
             }
+            artist_value = metadata.get('EXIF:Artist') or metadata.get('Artist')
+            if artist_value and 'XMP:Creator' not in xmp_metadata:
+                xmp_metadata['XMP:Creator'] = artist_value
             
             # Build new GIF file
             new_gif_data = self._build_gif_file(blocks, xmp_metadata)
@@ -446,6 +449,8 @@ class GIFWriter:
         # Build XMP packet (already returns bytes)
         xmp_packet = self.xmp_writer.build_xmp_packet(xmp_metadata)
         xmp_bytes = xmp_packet if isinstance(xmp_packet, bytes) else xmp_packet.encode('utf-8')
+        if not xmp_bytes:
+            return None
         
         # XMP application extension format:
         # 0x21 0xFF (extension introducer + application extension)
@@ -460,12 +465,22 @@ class GIFWriter:
         block.append(0x0B)  # Block size
         block.extend(self.XMP_IDENTIFIER)
         
-        # Write XMP data in 255-byte chunks
-        chunk_size = 255
-        for i in range(0, len(xmp_bytes), chunk_size):
-            chunk = xmp_bytes[i:i+chunk_size]
+        # GIF XMP uses a size-byte encoding where each data sub-block size
+        # comes from the next byte in the XMP packet.
+        xmp_buffer = bytearray(xmp_bytes)
+        idx = 0
+        while idx < len(xmp_buffer):
+            size = xmp_buffer[idx]
+            idx += 1
+            if size == 0:
+                break
+            if idx + size > len(xmp_buffer):
+                pad_len = idx + size - len(xmp_buffer)
+                xmp_buffer.extend(b' ' * pad_len)
+            chunk = bytes(xmp_buffer[idx:idx+size])
             block.append(len(chunk))
             block.extend(chunk)
+            idx += size
         
         # Terminator
         block.append(0x00)
@@ -495,4 +510,3 @@ class GIFWriter:
         block.append(0x00)
         
         return bytes(block)
-

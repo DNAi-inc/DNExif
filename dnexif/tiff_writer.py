@@ -18,7 +18,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
 from dnexif.exceptions import MetadataWriteError
 from dnexif.exif_writer import EXIFWriter
-from dnexif.exif_parser import ExifParser
+from dnexif.exif_parser import ExifParser, ExifTagType, TAG_SIZES
 from dnexif.iptc_writer import IPTCWriter
 from dnexif.xmp_writer import XMPWriter
 
@@ -49,7 +49,8 @@ class TIFFWriter:
         self,
         original_data: bytes,
         metadata: Dict[str, Any],
-        output_path: str
+        output_path: str,
+        skip_parse: bool = False
     ) -> None:
         """
         Write metadata to a TIFF file with structure preservation.
@@ -72,15 +73,19 @@ class TIFFWriter:
             self.endian = '>'
         else:
             raise MetadataWriteError("Invalid TIFF file")
+        self.exif_writer.endian = self.endian
         
         try:
-            # Parse original TIFF structure to extract image data
-            exif_parser = ExifParser(file_data=original_data)
-            original_metadata = exif_parser.read()
-            
-            # Merge new metadata with original
-            updated_metadata = original_metadata.copy()
-            updated_metadata.update(metadata)
+            if skip_parse:
+                updated_metadata = metadata.copy()
+            else:
+                # Parse original TIFF structure to extract image data
+                exif_parser = ExifParser(file_data=original_data)
+                original_metadata = exif_parser.read()
+                
+                # Merge new metadata with original
+                updated_metadata = original_metadata.copy()
+                updated_metadata.update(metadata)
             
             # Remove tags marked for deletion (None values)
             updated_metadata = {k: v for k, v in updated_metadata.items() if v is not None}
@@ -287,6 +292,19 @@ class TIFFWriter:
         header += struct.pack(f'{self.endian}H', 42)  # Magic number
         header += struct.pack(f'{self.endian}I', 8)  # IFD0 offset (will be 8)
         
+        # Ensure image data offsets exist so we can update them later
+        if image_data:
+            if is_tiled:
+                if 'IFD0:TileOffsets' not in exif_tags:
+                    exif_tags['IFD0:TileOffsets'] = [0]
+                if 'IFD0:TileByteCounts' not in exif_tags:
+                    exif_tags['IFD0:TileByteCounts'] = [len(image_data)]
+            else:
+                if 'IFD0:StripOffsets' not in exif_tags:
+                    exif_tags['IFD0:StripOffsets'] = [0]
+                if 'IFD0:StripByteCounts' not in exif_tags:
+                    exif_tags['IFD0:StripByteCounts'] = [len(image_data)]
+
         # Build IFD0 with metadata using EXIF writer
         ifd0_tags, ifd0_data = self.exif_writer._build_ifd(exif_tags, ifd_type='IFD0')
         initial_ifd0_entries = len(ifd0_tags)
@@ -360,6 +378,46 @@ class TIFFWriter:
             image_data_offset = iptc_data_offset + len(iptc_data)
         if xmp_data:
             image_data_offset = xmp_data_offset + len(xmp_data)
+
+        def _update_ifd0_tag(tag_id: int, value: Any) -> None:
+            for tag in ifd0_tags:
+                if tag['id'] == tag_id:
+                    tag_type, encoded_value, count = self.exif_writer._encode_tag_value(value)
+                    if tag_type is None:
+                        return
+                    value_size = TAG_SIZES.get(ExifTagType(tag_type), 1) * count
+                    if value_size <= 4:
+                        tag['type'] = tag_type
+                        tag['count'] = count
+                        tag['value'] = encoded_value
+                        tag['data'] = b''
+                        tag['inline'] = True
+                    else:
+                        tag['type'] = tag_type
+                        tag['count'] = count
+                        tag['data'] = encoded_value
+                        tag['inline'] = False
+                    return
+
+        if image_data:
+            if is_tiled:
+                counts = tile_byte_counts if tile_byte_counts else [len(image_data)]
+                offsets = []
+                current_offset = image_data_offset
+                for count in counts:
+                    offsets.append(current_offset)
+                    current_offset += count
+                _update_ifd0_tag(324, offsets)
+                _update_ifd0_tag(325, counts)
+            else:
+                counts = strip_byte_counts if strip_byte_counts else [len(image_data)]
+                offsets = []
+                current_offset = image_data_offset
+                for count in counts:
+                    offsets.append(current_offset)
+                    current_offset += count
+                _update_ifd0_tag(273, offsets)
+                _update_ifd0_tag(279, counts)
         
         # Update IFD0 to link to EXIF IFD if present
         if exif_ifd_tags:

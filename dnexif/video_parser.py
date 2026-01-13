@@ -74,7 +74,12 @@ class VideoParser:
         b'M4V ': 'Apple iTunes Video',
     }
     
-    def __init__(self, file_path: Optional[str] = None, file_data: Optional[bytes] = None):
+    def __init__(
+        self,
+        file_path: Optional[str] = None,
+        file_data: Optional[bytes] = None,
+        fast_scan: bool = False
+    ):
         """
         Initialize video parser.
         
@@ -84,6 +89,7 @@ class VideoParser:
         """
         self.file_path = file_path
         self.file_data = file_data
+        self.fast_scan = fast_scan
         self.metadata: Dict[str, Any] = {}
     
     @staticmethod
@@ -150,7 +156,10 @@ class VideoParser:
         # Parse based on format
         # M4V, 3GP, 3G2, M4A, and AAC all use the same QuickTime/MP4 atom structure as MP4/MOV
         if format_type in ('MP4', 'MOV', 'M4V', '3GP', '3G2', 'M4A', 'AAC'):
-            metadata.update(self._parse_mp4_mov())
+            if self.fast_scan:
+                metadata.update(self._parse_mp4_mov_fast())
+            else:
+                metadata.update(self._parse_mp4_mov())
         elif format_type == 'AVI':
             metadata.update(self._parse_avi())
         elif format_type == 'MKV':
@@ -761,6 +770,68 @@ class VideoParser:
             pass
         
         return metadata
+
+    def _parse_mp4_mov_fast(self) -> Dict[str, Any]:
+        """
+        Fast-path MP4/MOV parsing to avoid full-file scans.
+
+        Only extracts lightweight header metadata such as the ftyp atom.
+        """
+        metadata: Dict[str, Any] = {}
+        try:
+            ftyp_data = self._find_atom(b'ftyp')
+            if ftyp_data:
+                metadata.update(self._parse_ftyp_atom(ftyp_data))
+
+            tail_xmp = self._extract_xmp_from_tail()
+            if tail_xmp:
+                metadata.update(tail_xmp)
+        except Exception:
+            pass
+        return metadata
+
+    def _extract_xmp_from_tail(self, tail_bytes: int = 2 * 1024 * 1024) -> Dict[str, Any]:
+        """
+        Try to extract XMP UUID atom from the tail of the file to keep fast scans lightweight.
+        """
+        if not self.file_path:
+            return {}
+        try:
+            path = Path(self.file_path)
+            file_size = path.stat().st_size
+            if file_size <= 0:
+                return {}
+            read_size = min(tail_bytes, file_size)
+            with path.open('rb') as f:
+                f.seek(file_size - read_size)
+                tail_data = f.read(read_size)
+        except Exception:
+            return {}
+
+        xmp_uuid = bytes.fromhex('be7acfcb97a942e89c71999491e3afac')
+        legacy_uuid = bytes.fromhex('B14BEF8C07D94F8A9F15AF9E40734F24')
+
+        for idx in range(4, len(tail_data) - 24):
+            if tail_data[idx:idx+4] != b'uuid':
+                continue
+            uuid_start = idx + 4
+            uuid_end = uuid_start + 16
+            if uuid_end > len(tail_data):
+                break
+            uuid = tail_data[uuid_start:uuid_end]
+            if uuid not in (xmp_uuid, legacy_uuid):
+                continue
+            size = struct.unpack('>I', tail_data[idx-4:idx])[0]
+            atom_start = idx - 4
+            atom_end = atom_start + size
+            if size < 24 or atom_end > len(tail_data):
+                continue
+            payload = tail_data[uuid_end:atom_end]
+            try:
+                return XMPParser(file_data=payload).read(scan_entire_file=True)
+            except Exception:
+                return {}
+        return {}
     
     def _calculate_video_composite_tags(self, metadata: Dict[str, Any]) -> None:
         """
@@ -1112,8 +1183,25 @@ class VideoParser:
                         metadata['Video:Title'] = True
                         
                 elif item_type == b'\xa9art':  # Artist
-                    # Similar extraction for artist
-                    metadata['Video:Artist'] = True
+                    if offset + 16 < len(ilst_data):
+                        data_offset = offset + 8
+                        if data_offset + 8 < len(ilst_data):
+                            data_size = struct.unpack('>I', ilst_data[data_offset:data_offset+4])[0]
+                            data_type = ilst_data[data_offset+4:data_offset+8]
+                            if data_type == b'data' and data_offset + 16 < len(ilst_data):
+                                str_offset = data_offset + 16
+                                if str_offset < len(ilst_data):
+                                    end = ilst_data.find(b'\x00', str_offset)
+                                    if end == -1:
+                                        end = min(str_offset + 100, len(ilst_data))
+                                    try:
+                                        artist = ilst_data[str_offset:end].decode('utf-8', errors='ignore').strip()
+                                        if artist:
+                                            metadata['Video:Artist'] = artist
+                                    except Exception:
+                                        pass
+                    if 'Video:Artist' not in metadata:
+                        metadata['Video:Artist'] = True
                 elif item_type == b'\xa9day':  # Date
                     metadata['Video:Date'] = True
                 elif item_type == b'\xa9cmt':  # Comment
@@ -3274,6 +3362,10 @@ class VideoParser:
             if 'TITLE' in all_tags:
                 metadata['Video:Matroska:Title'] = all_tags['TITLE']
                 metadata['XMP:Title'] = all_tags['TITLE']
+
+            if 'ARTIST' in all_tags:
+                metadata['Video:Matroska:Artist'] = all_tags['ARTIST']
+                metadata['XMP:Creator'] = all_tags['ARTIST']
             
             if 'PROCESSING_SOFTWARE' in all_tags:
                 metadata['Video:Matroska:ProcessingSoftware'] = all_tags['PROCESSING_SOFTWARE']
@@ -11484,4 +11576,3 @@ class VideoParser:
             pass
         
         return metadata
-

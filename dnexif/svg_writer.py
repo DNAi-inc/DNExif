@@ -86,6 +86,12 @@ class SVGWriter:
                     # Default to SVG for unknown prefixes
                     svg_metadata[key] = value
 
+            artist_value = metadata.get('EXIF:Artist') or metadata.get('Artist')
+            if artist_value and 'XMP:Creator' not in xmp_metadata:
+                xmp_metadata['XMP:Creator'] = artist_value
+            if artist_value and 'DC:Creator' not in rdf_metadata:
+                rdf_metadata['DC:Creator'] = artist_value
+
             # Bridge common XMP tags into core SVG fields so round-trip reads succeed
             if 'XMP:Title' in xmp_metadata:
                 svg_metadata['Title'] = xmp_metadata['XMP:Title']
@@ -162,7 +168,7 @@ class SVGWriter:
                     
                     for key, value in rdf_metadata.items():
                         if key.startswith('DC:'):
-                            dc_tag = key[3:]
+                            dc_tag = key[3:].lower()
                             dc_elem = ET.SubElement(desc_elem, f'{{http://purl.org/dc/elements/1.1/}}{dc_tag}')
                             dc_elem.text = str(value)
             
@@ -173,4 +179,3 @@ class SVGWriter:
                 
         except Exception as e:
             raise MetadataWriteError(f"Failed to write SVG metadata: {str(e)}")
-

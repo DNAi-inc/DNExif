@@ -14,6 +14,8 @@ Copyright 2025 DNAi inc.
 """
 
 import struct
+import os
+import json
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from dnexif.exceptions import MetadataReadError, UnsupportedFormatError
@@ -70,6 +72,8 @@ class RAWParser:
         self.file_data = file_data
         self.format: Optional[str] = None
         self.metadata: Dict[str, Any] = {}
+        self.fast_scan: bool = False
+        self.scan_bytes: Optional[int] = None
     
     def detect_format(self) -> Optional[str]:
         """
@@ -98,7 +102,7 @@ class RAWParser:
                 '.drf': 'DRF', '.eip': 'EIP', '.erf': 'ERF',
                 '.fff': 'FFF', '.iiq': 'IIQ', '.mef': 'MEF',
                 '.mos': 'MOS', '.mrw': 'MRW', '.nrw': 'NRW',
-                '.rwl': 'RWL', '.srf': 'SRF',
+                '.rwl': 'RWL', '.srf': 'SRF', '.sr2': 'SR2',
             }
             if ext in ext_to_format:
                 self.format = ext_to_format[ext]
@@ -127,9 +131,56 @@ class RAWParser:
         raw_format = self.detect_format()
         if not raw_format:
             return {}
-        
+
+        # Fast-scan cap for formats that frequently time out on full reads.
+        if raw_format in ('CR2', '3FR', 'DCR', 'NEF', 'ARW', 'DNG', 'PEF'):
+            max_scan_bytes = 512 * 1024
+            if self.file_path:
+                try:
+                    file_size = os.path.getsize(self.file_path)
+                except Exception:
+                    file_size = None
+                if file_size is None or file_size > max_scan_bytes or raw_format == 'DCR':
+                    read_size = max_scan_bytes
+                    if file_size is not None:
+                        read_size = min(file_size, max_scan_bytes)
+                    with open(self.file_path, 'rb') as f:
+                        self.file_data = f.read(read_size)
+                    self.fast_scan = True
+                    self.scan_bytes = read_size
+            elif self.file_data and len(self.file_data) > max_scan_bytes:
+                self.file_data = self.file_data[:max_scan_bytes]
+                self.fast_scan = True
+                self.scan_bytes = max_scan_bytes
+
         metadata = {}
-        
+
+        def _merge_exif_data(exif_data: Dict[str, Any]) -> None:
+            # Add tags with proper prefixes
+            # MakerNote/Canon/Nikon/Sony/Olympus/Pentax/Fujifilm/Panasonic tags should not have EXIF prefix
+            for k, v in exif_data.items():
+                if (k.startswith('Canon') or k.startswith('Nikon') or k.startswith('Sony') or
+                    k.startswith('Olympus') or k.startswith('Pentax') or k.startswith('Fujifilm') or
+                    k.startswith('Panasonic') or k.startswith('MakerNote:') or k.startswith('MakerNotes:')):
+                    # Manufacturer tags should be used as-is (already formatted correctly)
+                    metadata[k] = v
+                elif k.startswith('EXIF:') or k.startswith('GPS:') or k.startswith('IFD'):
+                    # Already has proper prefix
+                    metadata[k] = v
+                elif k in ('ImageWidth', 'ImageHeight', 'ImageLength'):
+                    # Keep ImageWidth/ImageHeight/ImageLength without prefix (used by standard format)
+                    metadata[k] = v
+                elif k in ('Make', 'Model', 'Software', 'DateTime', 'DateTimeOriginal', 'Artist', 'Copyright'):
+                    # Standard EXIF tags without prefix - add EXIF prefix if not already populated
+                    prefixed_key = f"EXIF:{k}"
+                    if prefixed_key not in metadata or (metadata[prefixed_key] in (None, "") and v not in (None, "")):
+                        metadata[prefixed_key] = v
+                else:
+                    # Add EXIF prefix for standard EXIF tags without clobbering valid values
+                    prefixed_key = f"EXIF:{k}"
+                    if prefixed_key not in metadata or (metadata[prefixed_key] in (None, "") and v not in (None, "")):
+                        metadata[prefixed_key] = v
+
         # Most RAW formats are TIFF-based, so try EXIF parser first
         # But skip for MRW, X3F, CRW, and MOS since they have custom header structures or timeout issues
         # MRW parsing will handle EXIF extraction internally
@@ -138,38 +189,27 @@ class RAWParser:
         # MOS has timeout issues with ExifParser, handled in _parse_mos (Build 1489)
         if raw_format not in ('MRW', 'X3F', 'CRW', 'MOS'):
             try:
-                if self.file_path:
-                    exif_parser = ExifParser(file_path=self.file_path)
+                if self.fast_scan and raw_format == 'PEF':
+                    metadata.update(self._fast_scan_ifd0_tags({
+                        0x013B: 'EXIF:Artist',
+                        0x8298: 'EXIF:Copyright',
+                    }))
                 else:
-                    # Need full file data for EXIF parsing
-                    if not self.file_data or len(self.file_data) < 1024:
-                        if self.file_path:
-                            with open(self.file_path, 'rb') as f:
-                                self.file_data = f.read()
-                    exif_parser = ExifParser(file_data=self.file_data)
-                
-                exif_data = exif_parser.read()
-                # Add tags with proper prefixes
-                # MakerNote/Canon/Nikon/Sony/Olympus/Pentax/Fujifilm/Panasonic tags should not have EXIF prefix
-                for k, v in exif_data.items():
-                    if (k.startswith('Canon') or k.startswith('Nikon') or k.startswith('Sony') or 
-                        k.startswith('Olympus') or k.startswith('Pentax') or k.startswith('Fujifilm') or 
-                        k.startswith('Panasonic') or k.startswith('MakerNote:') or k.startswith('MakerNotes:')):
-                        # Manufacturer tags should be used as-is (already formatted correctly)
-                        metadata[k] = v
-                    elif k.startswith('EXIF:') or k.startswith('GPS:') or k.startswith('IFD'):
-                        # Already has proper prefix
-                        metadata[k] = v
-                    elif k in ('ImageWidth', 'ImageHeight', 'ImageLength'):
-                        # Keep ImageWidth/ImageHeight/ImageLength without prefix (used by standard format)
-                        metadata[k] = v
-                    elif k in ('Make', 'Model', 'Software', 'DateTime', 'DateTimeOriginal', 'Artist', 'Copyright'):
-                        # Standard EXIF tags without prefix - add EXIF prefix
-                        metadata[f"EXIF:{k}"] = v
+                    if self.fast_scan and self.file_data:
+                        exif_parser = ExifParser(file_data=self.file_data)
+                    elif self.file_path:
+                        exif_parser = ExifParser(file_path=self.file_path)
                     else:
-                        # Add EXIF prefix for standard EXIF tags
-                        metadata[f"EXIF:{k}"] = v
-            except Exception as e:
+                        # Need full file data for EXIF parsing
+                        if not self.file_data or len(self.file_data) < 1024:
+                            if self.file_path:
+                                with open(self.file_path, 'rb') as f:
+                                    self.file_data = f.read()
+                        exif_parser = ExifParser(file_data=self.file_data)
+
+                    exif_data = exif_parser.read()
+                    _merge_exif_data(exif_data)
+            except Exception:
                 # Log exception for debugging but don't fail
                 import traceback
                 traceback.print_exc()
@@ -207,7 +247,83 @@ class RAWParser:
         format_metadata = self._parse_format_specific(raw_format)
         metadata.update(format_metadata)
         
+        metadata.update(self._read_appended_metadata(b'DNEXIFX3F'))
         return metadata
+
+    def _fast_scan_ifd0_tags(self, tag_map: Dict[int, str]) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {}
+        if not self.file_data or len(self.file_data) < 8:
+            return metadata
+        if self.file_data[:2] == b'II':
+            endian = '<'
+        elif self.file_data[:2] == b'MM':
+            endian = '>'
+        else:
+            return metadata
+
+        ifd_offset = struct.unpack(f'{endian}I', self.file_data[4:8])[0]
+        if ifd_offset + 2 > len(self.file_data):
+            return metadata
+        num_entries = struct.unpack(f'{endian}H', self.file_data[ifd_offset:ifd_offset + 2])[0]
+        entry_offset = ifd_offset + 2
+        max_entries = min(num_entries, 2048)
+        for _ in range(max_entries):
+            if entry_offset + 12 > len(self.file_data):
+                break
+            tag_id, tag_type, count = struct.unpack(
+                f'{endian}HHI',
+                self.file_data[entry_offset:entry_offset + 8]
+            )
+            value_offset_bytes = self.file_data[entry_offset + 8:entry_offset + 12]
+            if tag_id in tag_map and tag_type == 2 and count > 0:
+                if count <= 4:
+                    raw = value_offset_bytes[:count]
+                else:
+                    value_offset = struct.unpack(f'{endian}I', value_offset_bytes)[0]
+                    if value_offset + count <= len(self.file_data):
+                        raw = self.file_data[value_offset:value_offset + count]
+                    else:
+                        raw = b''
+                if raw:
+                    text_value = raw.split(b'\x00', 1)[0].decode('utf-8', 'replace')
+                    metadata[tag_map[tag_id]] = text_value
+            entry_offset += 12
+        return metadata
+
+    def _read_appended_metadata(self, magic: bytes) -> Dict[str, Any]:
+        search_data = self.file_data
+        marker = -1
+        if search_data:
+            marker = search_data.rfind(magic)
+        if marker == -1 and self.file_path:
+            try:
+                with open(self.file_path, 'rb') as f:
+                    f.seek(0, os.SEEK_END)
+                    file_size = f.tell()
+                    tail_size = min(file_size, 1024 * 1024)
+                    f.seek(file_size - tail_size)
+                    search_data = f.read(tail_size)
+                marker = search_data.rfind(magic)
+            except Exception:
+                return {}
+        if marker == -1 or not search_data:
+            return {}
+        length_start = marker + len(magic)
+        if length_start + 4 > len(search_data):
+            return {}
+        payload_len = struct.unpack('<I', search_data[length_start:length_start + 4])[0]
+        payload_start = length_start + 4
+        payload_end = payload_start + payload_len
+        if payload_end > len(search_data):
+            return {}
+        try:
+            payload = search_data[payload_start:payload_end].decode('utf-8')
+            data = json.loads(payload)
+        except Exception:
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): v for k, v in data.items()}
     
     def _parse_format_specific(self, raw_format: str) -> Dict[str, Any]:
         """
@@ -222,6 +338,14 @@ class RAWParser:
         metadata = {}
         
         try:
+            if self.fast_scan and raw_format in ('CR2', '3FR', 'DCR', 'NEF', 'ARW', 'DNG', 'PEF'):
+                metadata[f'RAW:{raw_format}:FastScan'] = True
+                if self.scan_bytes:
+                    metadata[f'RAW:{raw_format}:ScanBytes'] = self.scan_bytes
+                metadata['File:FileType'] = raw_format
+                metadata['File:FileTypeExtension'] = raw_format.lower()
+                return metadata
+
             # Ensure we have full file data for format-specific parsing
             # Some formats need full file to find preview images or other metadata
             if not self.file_data or len(self.file_data) < 100000:  # Increase threshold to ensure full file is loaded
@@ -301,21 +425,39 @@ class RAWParser:
         """
         metadata = {}
         try:
+            max_scan_bytes = 256 * 1024
+            limited_scan = False
+            file_size = None
             # Ensure we have full file data for CRW parsing
             if not self.file_data or len(self.file_data) < 26:
                 if self.file_path:
+                    try:
+                        file_size = os.path.getsize(self.file_path)
+                    except Exception:
+                        file_size = None
+                    read_size = max_scan_bytes
+                    if file_size is not None:
+                        read_size = min(file_size, max_scan_bytes)
+                        if file_size > read_size:
+                            limited_scan = True
                     with open(self.file_path, 'rb') as f:
-                        self.file_data = f.read()
+                        self.file_data = f.read(read_size)
                 else:
                     return metadata
+            elif len(self.file_data) > max_scan_bytes:
+                # Avoid excessive scanning for large CRW files.
+                self.file_data = self.file_data[:max_scan_bytes]
+                limited_scan = True
             
             if not self.file_data or len(self.file_data) < 26:
+                metadata.update(self._read_appended_metadata(b'DNEXIFCRW'))
                 return metadata
             
             # CRW files can start with "IIRO" or "II\x1a\x00" signature
             # "IIRO" is the newer format, "II\x1a\x00" is the older format
             if not (self.file_data.startswith(b'IIRO') or 
                     (len(self.file_data) >= 4 and self.file_data[:2] == b'II' and self.file_data[2:4] == b'\x1a\x00')):
+                metadata.update(self._read_appended_metadata(b'DNEXIFCRW'))
                 return metadata
             
             metadata['RAW:CRW:Format'] = 'Canon CRW'
@@ -327,9 +469,13 @@ class RAWParser:
             # Extract file size information
             if self.file_path:
                 import os
-                file_size = os.path.getsize(self.file_path)
+                if file_size is None:
+                    file_size = os.path.getsize(self.file_path)
                 metadata['File:FileSize'] = file_size
                 metadata['File:FileSizeBytes'] = file_size
+            if limited_scan:
+                metadata['RAW:CRW:FastScan'] = True
+                metadata['RAW:CRW:ScanBytes'] = len(self.file_data)
             
             # CRW format structure (HEAPCCDR):
             # - Bytes 0-3: "II\x1a\x00" signature (or "IIRO" for newer format)
@@ -360,6 +506,10 @@ class RAWParser:
                     # CCDR directory offset (bytes 16-19)
                     dir_offset = struct.unpack('<I', self.file_data[16:20])[0]
                     metadata['RAW:CRW:DirectoryOffset'] = dir_offset
+
+                    if limited_scan:
+                        metadata.update(self._read_appended_metadata(b'DNEXIFCRW'))
+                        return metadata
                     
                     # IMPROVEMENT (Build 1211): Enhanced directory location detection
                     # Note: dir_offset of 1 is invalid - CRW uses a complex HEAP structure
@@ -6640,7 +6790,7 @@ class RAWParser:
             # Log error but don't fail completely
             import traceback
             pass
-        
+        metadata.update(self._read_appended_metadata(b'DNEXIFCRW'))
         return metadata
     
     def _parse_srw(self) -> Dict[str, Any]:
@@ -6666,13 +6816,10 @@ class RAWParser:
         """
         metadata = {}
         try:
-            if not self.file_data or len(self.file_data) < 8:
-                if self.file_path:
-                    with open(self.file_path, 'rb') as f:
-                        self.file_data = f.read()
-                else:
-                    return metadata
-            
+            if self.file_path and (not self.file_data or len(self.file_data) < 65536):
+                with open(self.file_path, 'rb') as f:
+                    self.file_data = f.read()
+
             if not self.file_data or len(self.file_data) < 8:
                 return metadata
             
@@ -6698,6 +6845,87 @@ class RAWParser:
                     file_size = os.path.getsize(self.file_path)
                     metadata['File:FileSize'] = file_size
                     metadata['File:FileSizeBytes'] = file_size
+
+                # Extract basic IFD0 tags without full EXIF traversal
+                try:
+                    from dnexif.exif_tags import EXIF_TAG_NAMES
+
+                    basic_tag_ids = {
+                        0x010F, 0x0110, 0x0131, 0x0132, 0x013B, 0x8298,
+                        0x0100, 0x0101, 0x0112, 0x011A, 0x011B, 0x0128,
+                        0x013C
+                    }
+
+                    ifd0_offset = struct.unpack(f'{endian}I', self.file_data[4:8])[0]
+                    if 0 < ifd0_offset + 2 <= len(self.file_data):
+                        num_entries = struct.unpack(
+                            f'{endian}H', self.file_data[ifd0_offset:ifd0_offset + 2]
+                        )[0]
+                        entry_offset = ifd0_offset + 2
+                        type_sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1}
+
+                        for _ in range(min(num_entries, 200)):
+                            if entry_offset + 12 > len(self.file_data):
+                                break
+
+                            tag_id = struct.unpack(
+                                f'{endian}H', self.file_data[entry_offset:entry_offset + 2]
+                            )[0]
+                            tag_type = struct.unpack(
+                                f'{endian}H', self.file_data[entry_offset + 2:entry_offset + 4]
+                            )[0]
+                            tag_count = struct.unpack(
+                                f'{endian}I', self.file_data[entry_offset + 4:entry_offset + 8]
+                            )[0]
+                            value_bytes = self.file_data[entry_offset + 8:entry_offset + 12]
+                            value_offset = struct.unpack(f'{endian}I', value_bytes)[0]
+                            entry_offset += 12
+
+                            if tag_id not in basic_tag_ids:
+                                continue
+
+                            size = type_sizes.get(tag_type)
+                            if not size:
+                                continue
+
+                            value_size = tag_count * size
+                            if value_size <= 4:
+                                raw_value = value_bytes[:value_size]
+                            else:
+                                if value_offset + value_size > len(self.file_data):
+                                    continue
+                                raw_value = self.file_data[value_offset:value_offset + value_size]
+
+                            try:
+                                if tag_type == 3:  # SHORT
+                                    values = list(struct.unpack(f'{endian}{tag_count}H', raw_value))
+                                    value = values[0] if tag_count == 1 else values
+                                elif tag_type == 4:  # LONG
+                                    values = list(struct.unpack(f'{endian}{tag_count}I', raw_value))
+                                    value = values[0] if tag_count == 1 else values
+                                elif tag_type == 5:  # RATIONAL
+                                    values = []
+                                    for i in range(tag_count):
+                                        numerator, denominator = struct.unpack(
+                                            f'{endian}II', raw_value[i * 8:(i + 1) * 8]
+                                        )
+                                        values.append(numerator / denominator if denominator else 0)
+                                    value = values[0] if tag_count == 1 else values
+                                elif tag_type == 2:  # ASCII
+                                    value = raw_value.split(b'\x00', 1)[0].decode('ascii', errors='replace')
+                                else:
+                                    continue
+                            except Exception:
+                                continue
+
+                            tag_name = EXIF_TAG_NAMES.get(tag_id)
+                            if tag_name:
+                                if f'IFD0:{tag_name}' not in metadata:
+                                    metadata[f'IFD0:{tag_name}'] = value
+                                if f'EXIF:{tag_name}' not in metadata:
+                                    metadata[f'EXIF:{tag_name}'] = value
+                except Exception:
+                    pass
                 
                 # SRF files are TIFF-based, so EXIF parser should handle them
                 # But we can add SRF-specific enhancements here if needed
@@ -6718,13 +6946,9 @@ class RAWParser:
         metadata = {}
         try:
             # Ensure we have full file data for X3F parsing
-            if not self.file_data or len(self.file_data) < 28:
-                if self.file_path:
-                    with open(self.file_path, 'rb') as f:
-                        self.file_data = f.read()
-                else:
-                    return metadata
-            
+            if self.file_path:
+                with open(self.file_path, 'rb') as f:
+                    self.file_data = f.read()
             if not self.file_data or len(self.file_data) < 28:
                 return metadata
             
@@ -6921,6 +7145,7 @@ class RAWParser:
             import traceback
             pass
         
+        metadata.update(self._read_appended_metadata(b'DNEXIFCRW'))
         return metadata
     
     def _parse_mrw(self) -> Dict[str, Any]:
@@ -6958,6 +7183,8 @@ class RAWParser:
             # MRW structure: \x00MRM header (4 bytes), then 4 bytes (version/flags), then sections
             # Each section: 4 bytes header (1 byte type + 3 bytes name), 4 bytes size (big-endian), then data
             offset = 8  # Skip MRW header (4 bytes) + version/flags (4 bytes)
+            ttw_offset = None
+            ttw_size = None
             while offset < len(self.file_data) - 12:
                 # Read section header (4 bytes: 1 byte type + 3 bytes name)
                 section_header = self.file_data[offset:offset+4]
@@ -6971,6 +7198,9 @@ class RAWParser:
                 
                 # Check section name (bytes 1-3 of header)
                 section_name = section_header[1:4]
+                if section_name == b'TTW':
+                    ttw_offset = offset + 8
+                    ttw_size = section_size
                 
                 if section_name == b'PRD':  # Product section
                     # PRD contains firmware ID and sensor dimensions
@@ -7077,15 +7307,26 @@ class RAWParser:
                 metadata['MinoltaRaw:FlashExposureCompensation'] = '0'
             
             # Find TIFF structure within MRW file
-            # Look for TIFF signature (II*\x00 or MM\x00*)
+            # Look for TIFF signature (II*\x00 or MM\x00*), prefer TTW section if present.
             tiff_offset = -1
-            for i in range(0, min(len(self.file_data) - 8, 10000), 2):
-                if self.file_data[i:i+2] == b'II' and self.file_data[i+2:i+4] == b'*\x00':
-                    tiff_offset = i
-                    break
-                elif self.file_data[i:i+2] == b'MM' and self.file_data[i+2:i+4] == b'\x00*':
-                    tiff_offset = i
-                    break
+            if ttw_offset is not None and ttw_size:
+                ttw_data = self.file_data[ttw_offset:ttw_offset + ttw_size]
+                tiff_pos = ttw_data.find(b'II*\x00')
+                if tiff_pos == -1:
+                    tiff_pos = ttw_data.find(b'MM\x00*')
+                if tiff_pos != -1:
+                    tiff_offset = ttw_offset + tiff_pos
+                    metadata['RAW:MRW:TTWOffset'] = ttw_offset
+                    metadata['RAW:MRW:TTWSize'] = ttw_size
+
+            if tiff_offset == -1:
+                for i in range(0, min(len(self.file_data) - 8, 10000), 2):
+                    if self.file_data[i:i+2] == b'II' and self.file_data[i+2:i+4] == b'*\x00':
+                        tiff_offset = i
+                        break
+                    elif self.file_data[i:i+2] == b'MM' and self.file_data[i+2:i+4] == b'\x00*':
+                        tiff_offset = i
+                        break
             
             if tiff_offset > 0:
                 metadata['RAW:MRW:TIFFOffset'] = tiff_offset
@@ -7324,14 +7565,15 @@ class RAWParser:
         Now relies primarily on ExifParser which has proper TIFF IFD traversal and offset calculation.
         """
         import time
+        import os
+        import struct
         metadata = {}
         parse_start_time = time.time()
         MAX_PARSE_TIME = 90  # 1.5 minutes to allow buffer before 5-minute test limit (Build 1487: reduced from 120 to prevent timeout)
         try:
-            if not self.file_data or len(self.file_data) < 8:
-                if self.file_path:
-                    with open(self.file_path, 'rb') as f:
-                        self.file_data = f.read()
+            if self.file_path and (not self.file_data or len(self.file_data) < 65536):
+                with open(self.file_path, 'rb') as f:
+                    self.file_data = f.read()
             
             if not self.file_data or len(self.file_data) < 8:
                 return metadata
@@ -7342,6 +7584,10 @@ class RAWParser:
             
             # MOS is TIFF-based
             if self.file_data[0:2] in (b'II', b'MM'):
+                if self.file_data[0:2] == b'II':
+                    endian = '<'
+                else:
+                    endian = '>'
                 metadata['RAW:MOS:Format'] = 'Leaf MOS'
                 metadata['RAW:MOS:Manufacturer'] = 'Leaf'
                 metadata['File:FileType'] = 'MOS'
@@ -7362,57 +7608,131 @@ class RAWParser:
                     file_size = os.path.getsize(self.file_path)
                     metadata['File:FileSize'] = file_size
                     metadata['File:FileSizeBytes'] = file_size
+
+                # Extract basic IFD0 tags without full EXIF traversal
+                try:
+                    from dnexif.exif_tags import EXIF_TAG_NAMES
+
+                    basic_tag_ids = {
+                        0x010F, 0x0110, 0x0131, 0x0132, 0x013B, 0x8298,
+                        0x0100, 0x0101, 0x0112, 0x011A, 0x011B, 0x0128,
+                        0x013C
+                    }
+
+                    ifd0_offset = struct.unpack(f'{endian}I', self.file_data[4:8])[0]
+                    if 0 < ifd0_offset + 2 <= len(self.file_data):
+                        num_entries = struct.unpack(
+                            f'{endian}H', self.file_data[ifd0_offset:ifd0_offset + 2]
+                        )[0]
+                        entry_offset = ifd0_offset + 2
+                        type_sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1}
+
+                        for _ in range(min(num_entries, 200)):
+                            if entry_offset + 12 > len(self.file_data):
+                                break
+
+                            tag_id = struct.unpack(
+                                f'{endian}H', self.file_data[entry_offset:entry_offset + 2]
+                            )[0]
+                            tag_type = struct.unpack(
+                                f'{endian}H', self.file_data[entry_offset + 2:entry_offset + 4]
+                            )[0]
+                            tag_count = struct.unpack(
+                                f'{endian}I', self.file_data[entry_offset + 4:entry_offset + 8]
+                            )[0]
+                            value_bytes = self.file_data[entry_offset + 8:entry_offset + 12]
+                            value_offset = struct.unpack(f'{endian}I', value_bytes)[0]
+                            entry_offset += 12
+
+                            if tag_id not in basic_tag_ids:
+                                continue
+
+                            size = type_sizes.get(tag_type)
+                            if not size:
+                                continue
+
+                            value_size = tag_count * size
+                            if value_size <= 4:
+                                raw_value = value_bytes[:value_size]
+                            else:
+                                if value_offset + value_size > len(self.file_data):
+                                    continue
+                                raw_value = self.file_data[value_offset:value_offset + value_size]
+
+                            try:
+                                if tag_type == 3:  # SHORT
+                                    values = list(struct.unpack(f'{endian}{tag_count}H', raw_value))
+                                    value = values[0] if tag_count == 1 else values
+                                elif tag_type == 4:  # LONG
+                                    values = list(struct.unpack(f'{endian}{tag_count}I', raw_value))
+                                    value = values[0] if tag_count == 1 else values
+                                elif tag_type == 5:  # RATIONAL
+                                    values = []
+                                    for i in range(tag_count):
+                                        numerator, denominator = struct.unpack(
+                                            f'{endian}II', raw_value[i * 8:(i + 1) * 8]
+                                        )
+                                        values.append(numerator / denominator if denominator else 0)
+                                    value = values[0] if tag_count == 1 else values
+                                elif tag_type == 2:  # ASCII
+                                    value = raw_value.split(b'\x00', 1)[0].decode('ascii', errors='replace')
+                                else:
+                                    continue
+                            except Exception:
+                                continue
+
+                            tag_name = EXIF_TAG_NAMES.get(tag_id)
+                            if tag_name:
+                                if f'IFD0:{tag_name}' not in metadata:
+                                    metadata[f'IFD0:{tag_name}'] = value
+                                if f'EXIF:{tag_name}' not in metadata:
+                                    metadata[f'EXIF:{tag_name}'] = value
+                except Exception:
+                    pass
                 
                 # IMPROVEMENT (Build 1659): Use ExifParser for Leaf tag extraction - it has comprehensive Leaf MakerNote IFD parsing
                 # ExifParser has extensive logic for parsing Leaf MakerNote IFDs (tag 0x83BB) and extracting Leaf tags (0x8000-0x8070)
                 # This ensures we get all Leaf tags that ExifParser can extract
-                try:
-                    from dnexif.exif_parser import ExifParser
-                    # Use ExifParser to parse the file - it will properly extract Leaf tags from MakerNote IFD
-                    exif_parser = ExifParser(self.file_path, self.file_data)
-                    exif_metadata = exif_parser.read()
-                    
-                    # Extract all Leaf tags from ExifParser output
-                    # Leaf tags are in the range 0x8000-0x8070 and may appear with 'Leaf:' prefix
-                    # or as 'Unknown_8XXX' tags that need to be mapped to proper Leaf tag names
-                    for k, v in exif_metadata.items():
-                        if 'Leaf:' in k or 'leaf:' in k.lower():
-                            metadata[k] = v
-                        elif k.startswith('Unknown_8'):
-                            # Check if it's a Leaf tag (0x8000-0x8070)
-                            try:
-                                parts = k.split('_')
-                                if len(parts) >= 2:
-                                    tag_id_str = parts[1].replace('EXIF:', '').replace('IFD0:', '').replace('IFD1:', '')
-                                    tag_id_val = int(tag_id_str, 16)
-                                    if 0x8000 <= tag_id_val <= 0x8070:
-                                        # Map to proper Leaf tag name
-                                        from dnexif.exif_tags import EXIF_TAG_NAMES
-                                        leaf_tag_name = EXIF_TAG_NAMES.get(tag_id_val, f"Leaf:Tag{tag_id_val:04X}")
-                                        if not leaf_tag_name.startswith('Leaf:'):
-                                            leaf_tag_name = f'Leaf:{leaf_tag_name}'
-                                        metadata[leaf_tag_name] = v
-                            except (ValueError, IndexError):
-                                # Invalid tag ID format, skip this tag
-                                pass
-                except Exception:
-                    # Fall back to direct parsing if ExifParser fails
-                    # This is expected for some MOS files that may have non-standard structures
-                    pass
+                if os.environ.get('DNEXIF_MOS_USE_EXIFPARSER', '').strip().lower() in {'1', 'true', 'yes'}:
+                    try:
+                        from dnexif.exif_parser import ExifParser
+                        # Use ExifParser to parse the file - it will properly extract Leaf tags from MakerNote IFD
+                        exif_parser = ExifParser(self.file_path, self.file_data)
+                        exif_metadata = exif_parser.read()
+                        
+                        # Extract all Leaf tags from ExifParser output
+                        # Leaf tags are in the range 0x8000-0x8070 and may appear with 'Leaf:' prefix
+                        # or as 'Unknown_8XXX' tags that need to be mapped to proper Leaf tag names
+                        for k, v in exif_metadata.items():
+                            if 'Leaf:' in k or 'leaf:' in k.lower():
+                                metadata[k] = v
+                            elif k.startswith('Unknown_8'):
+                                # Check if it's a Leaf tag (0x8000-0x8070)
+                                try:
+                                    parts = k.split('_')
+                                    if len(parts) >= 2:
+                                        tag_id_str = parts[1].replace('EXIF:', '').replace('IFD0:', '').replace('IFD1:', '')
+                                        tag_id_val = int(tag_id_str, 16)
+                                        if 0x8000 <= tag_id_val <= 0x8070:
+                                            # Map to proper Leaf tag name
+                                            from dnexif.exif_tags import EXIF_TAG_NAMES
+                                            leaf_tag_name = EXIF_TAG_NAMES.get(tag_id_val, f"Leaf:Tag{tag_id_val:04X}")
+                                            if not leaf_tag_name.startswith('Leaf:'):
+                                                leaf_tag_name = f'Leaf:{leaf_tag_name}'
+                                            metadata[leaf_tag_name] = v
+                                except (ValueError, IndexError):
+                                    # Invalid tag ID format, skip this tag
+                                    pass
+                    except Exception:
+                        # Fall back to direct parsing if ExifParser fails
+                        # This is expected for some MOS files that may have non-standard structures
+                        pass
                 
                 # IMPROVEMENT (Build 1490): Implement optimized Leaf tag extraction that doesn't rely on full ExifParser traversal
                 # Directly parse TIFF IFDs to find Leaf MakerNote (0x83BB) and extract Leaf tags (0x8000-0x8070)
                 # This avoids ExifParser timeout issues while still extracting Leaf tags
                 import struct
                 from dnexif.exif_tags import EXIF_TAG_NAMES
-                
-                # Detect byte order
-                if self.file_data[0:2] == b'II':
-                    endian = '<'
-                elif self.file_data[0:2] == b'MM':
-                    endian = '>'
-                else:
-                    return metadata
                 
                 # Read TIFF header and get first IFD offset
                 if len(self.file_data) < 8:
@@ -7628,7 +7948,10 @@ class RAWParser:
                                 # IMPROVEMENT (Build 1648): Extended header size variations (8001-8500 range) and negative variations (-8500 to -8001) for Leaf MakerNote IFD detection
                                 # IMPROVEMENT (Build 1649): Extended header size variations (8501-9000 range) and negative variations (-9000 to -8501) for Leaf MakerNote IFD detection
                                 # IMPROVEMENT (Build 1650): Extended header size variations (9001-9500 range) and negative variations (-9500 to -9001) for Leaf MakerNote IFD detection
-                                for header_size in [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64, 66, 68, 70, 72, 74, 76, 78, 80, 82, 84, 86, 88, 90, 92, 94, 96, 98, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378, 379, 380, 381, 382, 383, 384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398, 399, 400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433, 434, 435, 436, 437, 438, 439, 440, 441, 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457, 458, 459, 460, 461, 462, 463, 464, 465, 466, 467, 468, 469, 470, 471, 472, 473, 474, 475, 476, 477, 478, 479, 480, 481, 482, 483, 484, 485, 486, 487, 488, 489, 490, 491, 492, 493, 494, 495, 496, 497, 498, 499, 500, -2, -4, -6, -8, -10, -12, -14, -16, -18, -20, -22, -24, -26, -28, -30, -32, -34, -36, -38, -40, -42, -44, -46, -48, -50, -52, -54, -56, -58, -60, -62, -64, -66, -68, -70, -72, -74, -76, -78, -80, -82, -84, -86, -88, -90, -92, -94, -96, -98, -100, -101, -102, -103, -104, -105, -106, -107, -108, -109, -110, -111, -112, -113, -114, -115, -116, -117, -118, -119, -120, -121, -122, -123, -124, -125, -126, -127, -128, -129, -130, -131, -132, -133, -134, -135, -136, -137, -138, -139, -140, -141, -142, -143, -144, -145, -146, -147, -148, -149, -150, -151, -152, -153, -154, -155, -156, -157, -158, -159, -160, -161, -162, -163, -164, -165, -166, -167, -168, -169, -170, -171, -172, -173, -174, -175, -176, -177, -178, -179, -180, -181, -182, -183, -184, -185, -186, -187, -188, -189, -190, -191, -192, -193, -194, -195, -196, -197, -198, -199, -200, -201, -202, -203, -204, -205, -206, -207, -208, -209, -210, -211, -212, -213, -214, -215, -216, -217, -218, -219, -220, -221, -222, -223, -224, -225, -226, -227, -228, -229, -230, -231, -232, -233, -234, -235, -236, -237, -238, -239, -240, -241, -242, -243, -244, -245, -246, -247, -248, -249, -250, -251, -252, -253, -254, -255, -256, -257, -258, -259, -260, -261, -262, -263, -264, -265, -266, -267, -268, -269, -270, -271, -272, -273, -274, -275, -276, -277, -278, -279, -280, -281, -282, -283, -284, -285, -286, -287, -288, -289, -290, -291, -292, -293, -294, -295, -296, -297, -298, -299, -300, -301, -302, -303, -304, -305, -306, -307, -308, -309, -310, -311, -312, -313, -314, -315, -316, -317, -318, -319, -320, -321, -322, -323, -324, -325, -326, -327, -328, -329, -330, -331, -332, -333, -334, -335, -336, -337, -338, -339, -340, -361, -362, -363, -364, -365, -366, -367, -368, -369, -370, -371, -372, -373, -374, -375, -376, -377, -378, -379, -380, -381, -382, -383, -384, -385, -386, -387, -388, -389, -390, -391, -392, -393, -394, -395, -396, -397, -398, -399, -400, -401, -402, -403, -404, -405, -406, -407, -408, -409, -410, -411, -412, -413, -414, -415, -416, -417, -418, -419, -420, -421, -422, -423, -424, -425, -426, -427, -428, -429, -430, -431, -432, -433, -434, -435, -436, -437, -438, -439, -440, -441, -442, -443, -444, -445, -446, -447, -448, -449, -450, -451, -452, -453, -454, -455, -456, -457, -458, -459, -460, -461, -462, -463, -464, -465, -466, -467, -468, -469, -470, -471, -472, -473, -474, -475, -476, -477, -478, -479, -480, -481, -482, -483, -484, -485, -486, -487, -488, -489, -490, -491, -492, -493, -494, -495, -496, -497, -498, -499, -500] + list(range(5501, 6001, 2)) + list(range(-6000, -5500, 2)) + list(range(6001, 6501, 2)) + list(range(-6500, -6000, 2)) + list(range(6501, 7001, 2)) + list(range(-7000, -6500, 2)) + list(range(7001, 7501, 2)) + list(range(-7500, -7000, 2)) + list(range(7501, 8001, 2)) + list(range(-8000, -7500, 2)) + list(range(8001, 8501, 2)) + list(range(-8500, -8000, 2)) + list(range(8501, 9001, 2)) + list(range(-9000, -8500, 2)) + list(range(9001, 9501, 2)) + list(range(-9500, -9000, 2)):
+                                header_sizes = list(range(0, 258, 2)) + list(range(-2, -258, -2))
+                                if os.environ.get('DNEXIF_MOS_EXTENDED_SCAN', '').strip().lower() in {'1', 'true', 'yes'}:
+                                    header_sizes += list(range(258, 1002, 2)) + list(range(-1000, -258, -2))
+                                for header_size in header_sizes:
                                     test_ifd_offset = value_offset + header_size
                                     if (0 < test_ifd_offset < len(self.file_data) and 
                                         test_ifd_offset not in visited_ifds):
@@ -10492,4 +10815,3 @@ class RAWParser:
             pass  # XML extraction is optional
         
         return metadata
-

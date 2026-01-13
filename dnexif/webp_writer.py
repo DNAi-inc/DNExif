@@ -364,7 +364,7 @@ class WebPWriter:
         xmp_packet = self.xmp_writer.build_xmp_packet(xmp_metadata)
         
         # XMP chunk is just the XMP packet
-        return xmp_packet.encode('utf-8')
+        return xmp_packet if isinstance(xmp_packet, bytes) else xmp_packet.encode('utf-8')
     
     def _write_chunk(self, chunk_type: bytes, chunk_data: bytes) -> bytes:
         """
@@ -434,4 +434,3 @@ class WebPWriter:
         payload[4:7] = (width - 1).to_bytes(3, 'little')
         payload[7:10] = (height - 1).to_bytes(3, 'little')
         return bytes(payload)
-

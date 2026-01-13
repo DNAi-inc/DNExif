@@ -34,15 +34,10 @@ class FormatDetector:
         b'GIF87a': 'GIF',
         b'GIF89a': 'GIF',
         b'BM': 'BMP',
-        b'RIFF': 'WEBP',  # May need more checking
-        b'ftyp': 'HEIC',  # May need more checking
         # RAW formats
         b'IIRS': 'CR2',
         b'IIRO': 'CRW',
         b'FUJIFILM': 'RAF',
-        # Video formats
-        b'ftyp': 'MP4',  # May need more checking
-        b'ftypqt': 'MOV',
         # Document formats
         b'%PDF': 'PDF',
         # Audio formats
@@ -50,7 +45,6 @@ class FormatDetector:
         b'\xff\xfb': 'MP3',
         b'\xff\xf3': 'MP3',
         b'\xff\xf2': 'MP3',
-        b'RIFF': 'WAV',  # May need more checking
     }
     
     # Extension to format mapping
@@ -100,6 +94,22 @@ class FormatDetector:
         
         # Check file signature
         if file_data:
+            if len(file_data) >= 12 and file_data[0:4] == b'RIFF':
+                riff_type = file_data[8:12]
+                if riff_type == b'WEBP':
+                    return 'WEBP'
+                if riff_type == b'WAVE':
+                    return 'WAV'
+
+            if len(file_data) >= 12 and file_data[4:8] == b'ftyp':
+                major_brand = file_data[8:12]
+                if major_brand in {b'heic', b'heix', b'hevc', b'hevx', b'heif', b'mif1', b'msf1'}:
+                    return 'HEIC'
+                if major_brand == b'qt  ':
+                    return 'MOV'
+                if major_brand in {b'isom', b'iso2', b'iso5', b'iso6', b'mp41', b'mp42', b'avc1', b'dash'}:
+                    return 'MP4'
+
             for signature, format_name in cls.FORMAT_SIGNATURES.items():
                 if file_data.startswith(signature):
                     return format_name
@@ -122,4 +132,3 @@ class FormatDetector:
             'CR2', 'NEF', 'ARW', 'DNG', 'ORF', 'RAF', 'RW2', 'PEF',
         ]
         return format_name.upper() in supported
-

@@ -2021,7 +2021,16 @@ class DNExif:
             if file_ext in video_formats:
                 # Use video parser for video files
                 try:
-                    video_parser = VideoParser(file_path=str(self.file_path))
+                    if self.fast_mode or self.length is not None or file_ext in ('.m4a', '.aac'):
+                        max_len = self.length if self.length is not None else 1024 * 1024
+                        video_data_bytes = self._read_file_data(max_length=max_len)
+                        video_parser = VideoParser(
+                            file_path=str(self.file_path),
+                            file_data=video_data_bytes,
+                            fast_scan=True
+                        )
+                    else:
+                        video_parser = VideoParser(file_path=str(self.file_path))
                     video_data = video_parser.parse()
                     self.metadata.update(video_data)
                 except Exception as e:
@@ -3083,8 +3092,7 @@ class DNExif:
                         # Log but don't fail for ICO/CUR parsing issues
                         pass
                     pass
-                self._add_composite_tags()
-                return  # ICO/CUR files handled separately
+                # Continue parsing to allow XMP/metadata extraction for ICO/CUR files.
             
             # Check for PCX files
             if file_ext == '.pcx':
@@ -3395,16 +3403,18 @@ class DNExif:
                     raw_parser = RAWParser(file_path=str(self.file_path))
                     raw_data = raw_parser.parse()
                     self.metadata.update(raw_data)
+                    raw_fast_scan = getattr(raw_parser, 'fast_scan', False)
                 except Exception as raw_e:
                     # RAW parsing errors are non-critical, continue with EXIF parser
                     if not self.ignore_minor_errors:
                         # Log but don't fail for RAW parsing issues
                         pass
+                    raw_fast_scan = False
                 
                 # Also try standard EXIF parser (RAW files often have EXIF)
                 # IMPROVEMENT (Build 1489): Skip ExifParser for MOS files to prevent timeout
                 # MOS parser already handles metadata extraction and ExifParser causes timeout issues
-                if file_ext != '.mos':
+                if file_ext != '.mos' and not raw_fast_scan:
                     try:
                         exif_parser = ExifParser(file_path=str(self.file_path))
                         self._exif_parser = exif_parser  # Store for File:ExifByteOrder extraction
@@ -3419,13 +3429,20 @@ class DNExif:
                                 self.metadata[k] = v
                             elif k.startswith('EXIF:') or k.startswith('GPS:') or k.startswith('IFD'):
                                 # Already has proper prefix
-                                self.metadata[k] = v
+                                if k not in self.metadata or (self.metadata[k] in (None, "") and v not in (None, "")):
+                                    self.metadata[k] = v
                             elif k in ('ImageWidth', 'ImageHeight', 'ImageLength'):
                                 # Keep ImageWidth/ImageHeight/ImageLength without prefix (used by standard format)
                                 self.metadata[k] = v
+                            elif k in ('Make', 'Model', 'Software', 'DateTime', 'DateTimeOriginal', 'Artist', 'Copyright'):
+                                prefixed_key = f"EXIF:{k}"
+                                if prefixed_key not in self.metadata or (self.metadata[prefixed_key] in (None, "") and v not in (None, "")):
+                                    self.metadata[prefixed_key] = v
                             else:
                                 # Add EXIF prefix for standard EXIF tags
-                                self.metadata[f"EXIF:{k}"] = v
+                                prefixed_key = f"EXIF:{k}"
+                                if prefixed_key not in self.metadata or (self.metadata[prefixed_key] in (None, "") and v not in (None, "")):
+                                    self.metadata[prefixed_key] = v
                         
                         # Special handling for Sony ARW and similar formats:
                         # If EXIF:SubfileType exists and is "Full-resolution image", use it as SubfileType
@@ -3440,6 +3457,115 @@ class DNExif:
                                 self.metadata['SubfileType'] = format_exif_value('SubfileType', 0)
                     except Exception as exif_e:
                         # EXIF extraction from RAW is optional
+                        pass
+                elif raw_fast_scan and file_ext == '.cr2':
+                    # Try a lightweight EXIF scan from the file head to recover basic tags.
+                    try:
+                        head_data = self._read_file_data(max_length=1024 * 1024)
+                        exif_parser = ExifParser(file_data=head_data)
+                        self._exif_parser = exif_parser
+                        exif_data = exif_parser.read()
+                        for k, v in exif_data.items():
+                            if (k.startswith('Canon') or k.startswith('Nikon') or k.startswith('Sony') or 
+                                k.startswith('Olympus') or k.startswith('Pentax') or k.startswith('Fujifilm') or 
+                                k.startswith('Panasonic') or k.startswith('MakerNote:') or k.startswith('MakerNotes:')):
+                                self.metadata[k] = v
+                            elif k.startswith('EXIF:') or k.startswith('GPS:') or k.startswith('IFD'):
+                                self.metadata[k] = v
+                            elif k in ('ImageWidth', 'ImageHeight', 'ImageLength'):
+                                self.metadata[k] = v
+                            else:
+                                self.metadata[f"EXIF:{k}"] = v
+                        self.metadata['RAW:FastExifScan'] = True
+                    except Exception:
+                        pass
+                elif raw_fast_scan and file_ext == '.nef':
+                    # NEF fast-scan: parse minimal IFD0 tags to avoid heavy EXIF walks.
+                    try:
+                        head_data = self._read_file_data(max_length=1024 * 1024)
+                        if len(head_data) >= 8 and head_data[:2] in (b'II', b'MM'):
+                            endian = '<' if head_data[:2] == b'II' else '>'
+                            magic = struct.unpack(f'{endian}H', head_data[2:4])[0]
+                            if magic == 42:
+                                ifd_offset = struct.unpack(f'{endian}I', head_data[4:8])[0]
+                                if ifd_offset + 2 <= len(head_data):
+                                    num_entries = struct.unpack(
+                                        f'{endian}H', head_data[ifd_offset:ifd_offset + 2]
+                                    )[0]
+                                    entry_offset = ifd_offset + 2
+                                    for _ in range(min(num_entries, 128)):
+                                        if entry_offset + 12 > len(head_data):
+                                            break
+                                        tag_id, tag_type, count = struct.unpack(
+                                            f'{endian}HHI', head_data[entry_offset:entry_offset + 8]
+                                        )
+                                        value_bytes = head_data[entry_offset + 8:entry_offset + 12]
+                                        entry_offset += 12
+                                        if tag_id not in (0x010F, 0x0110, 0x013B, 0x8298):
+                                            continue
+                                        if tag_type != 2 or count == 0:
+                                            continue
+                                        value_size = count
+                                        if value_size <= 4:
+                                            raw_value = value_bytes[:value_size]
+                                        else:
+                                            value_offset = struct.unpack(f'{endian}I', value_bytes)[0]
+                                            if value_offset + value_size > len(head_data):
+                                                continue
+                                            raw_value = head_data[value_offset:value_offset + value_size]
+                                        text_value = raw_value.split(b'\x00', 1)[0].decode('ascii', errors='replace')
+                                        if tag_id == 0x010F:
+                                            self.metadata['EXIF:Make'] = text_value
+                                        elif tag_id == 0x0110:
+                                            self.metadata['EXIF:Model'] = text_value
+                                        elif tag_id == 0x013B:
+                                            self.metadata['EXIF:Artist'] = text_value
+                                        elif tag_id == 0x8298:
+                                            self.metadata['EXIF:Copyright'] = text_value
+                                    self.metadata['RAW:FastExifScan'] = True
+                    except Exception:
+                        pass
+                elif raw_fast_scan and file_ext == '.dcr':
+                    # DCR fast-scan: only parse minimal IFD0 tags to avoid long EXIF walks.
+                    try:
+                        head_data = self._read_file_data(max_length=1024 * 1024)
+                        if len(head_data) >= 8 and head_data[:2] in (b'II', b'MM'):
+                            endian = '<' if head_data[:2] == b'II' else '>'
+                            magic = struct.unpack(f'{endian}H', head_data[2:4])[0]
+                            if magic == 42:
+                                ifd_offset = struct.unpack(f'{endian}I', head_data[4:8])[0]
+                                if ifd_offset + 2 <= len(head_data):
+                                    num_entries = struct.unpack(
+                                        f'{endian}H', head_data[ifd_offset:ifd_offset + 2]
+                                    )[0]
+                                    entry_offset = ifd_offset + 2
+                                    for _ in range(min(num_entries, 128)):
+                                        if entry_offset + 12 > len(head_data):
+                                            break
+                                        tag_id, tag_type, count = struct.unpack(
+                                            f'{endian}HHI', head_data[entry_offset:entry_offset + 8]
+                                        )
+                                        value_bytes = head_data[entry_offset + 8:entry_offset + 12]
+                                        entry_offset += 12
+                                        if tag_id not in (0x013B, 0x8298):
+                                            continue
+                                        if tag_type != 2 or count == 0:
+                                            continue
+                                        value_size = count
+                                        if value_size <= 4:
+                                            raw_value = value_bytes[:value_size]
+                                        else:
+                                            value_offset = struct.unpack(f'{endian}I', value_bytes)[0]
+                                            if value_offset + value_size > len(head_data):
+                                                continue
+                                            raw_value = head_data[value_offset:value_offset + value_size]
+                                        text_value = raw_value.split(b'\x00', 1)[0].decode('ascii', errors='replace')
+                                        if tag_id == 0x013B:
+                                            self.metadata['EXIF:Artist'] = text_value
+                                        elif tag_id == 0x8298:
+                                            self.metadata['EXIF:Copyright'] = text_value
+                                    self.metadata['RAW:FastExifScan'] = True
+                    except Exception:
                         pass
                 
                 # Cleanup: Remove EXIF/IFD prefixes from MakerNote tags (should be "MakerNotes:" not "EXIF:MakerNotes:" or "IFD1:MakerNotes:")
@@ -3548,6 +3674,9 @@ class DNExif:
                 except Exception as png_e:
                     # PNG EXIF extraction is optional
                     pass
+            elif file_ext in ('.ico', '.cur'):
+                # ICO/CUR files don't support standard EXIF blocks; skip EXIF parsing.
+                pass
             else:
                 # Load EXIF metadata (JPEG, TIFF, etc.)
                 self._exif_parser = ExifParser(file_path=str(self.file_path))
@@ -7113,6 +7242,44 @@ class DNExif:
             # Add aliases for other common EXIF tags without EXIF: prefix (Standard format shows these both ways)
             # Common tags that Standard format shows without prefix: Make, Model, Software, Artist, Copyright, DateTime, etc.
             # Also add reverse aliases: if tag exists without prefix, ensure EXIF: version exists too
+            if 'EXIF:Artist' not in self.metadata:
+                artist_candidates = [
+                    'Artist',
+                    'XMP:Creator',
+                    'XMP:Artist',
+                    'XMP-dc:Creator',
+                    'XMP-dc:Artist',
+                    'PDF:Author',
+                    'Document:PDF:Author',
+                    'Audio:MP3:Artist',
+                    'Audio:WAV:Artist',
+                    'Audio:FLAC:Artist',
+                    'Audio:OGG:Artist',
+                    'Audio:OPUS:Artist',
+                    'Audio:WMA:Artist',
+                    'ID3:Artist',
+                    'RIFF:ID3:Artist',
+                    'Video:AVI:Artist',
+                    'Video:Matroska:Artist',
+                    'Video:Artist',
+                ]
+                artist_value = None
+                for key in artist_candidates:
+                    if key in self.metadata and self.metadata[key]:
+                        candidate = self.metadata[key]
+                        if isinstance(candidate, (list, tuple)):
+                            for item in candidate:
+                                if item:
+                                    artist_value = item
+                                    break
+                        else:
+                            artist_value = candidate
+                        if artist_value:
+                            break
+                if artist_value:
+                    self.metadata['EXIF:Artist'] = artist_value
+                    self.metadata.setdefault('Artist', artist_value)
+
             common_exif_aliases = {
                 'EXIF:Make': 'Make',
                 'EXIF:Model': 'Model',
@@ -9523,7 +9690,23 @@ class DNExif:
         if tag_name in self.modified_tags:
             return self.modified_tags[tag_name]
         
-        return self.metadata.get(tag_name, default)
+        if tag_name in self.metadata:
+            value = self.metadata[tag_name]
+            if value is not None:
+                return value
+
+        if ':' in tag_name:
+            namespace, name = tag_name.split(':', 1)
+            if namespace == 'EXIF':
+                if f'IFD0:{name}' in self.metadata:
+                    return self.metadata[f'IFD0:{name}']
+            elif namespace == 'IFD0':
+                if f'EXIF:{name}' in self.metadata:
+                    return self.metadata[f'EXIF:{name}']
+            if name in self.metadata:
+                return self.metadata[name]
+
+        return default
     
     def get_formatted_tag(self, tag_name: str, default: str = '') -> str:
         """
@@ -11157,8 +11340,8 @@ class DNExif:
             if image_data_md5:
                 merged_metadata['XMP-et:OriginalImageMD5'] = image_data_md5
         
-        # Determine file format and write accordingly
-        file_ext = self.file_path.suffix.lower()
+        # Determine file format based on output path (SaveFormat may change extension)
+        file_ext = output.suffix.lower()
         
         if file_ext in ('.jpg', '.jpeg'):
             self._save_jpeg(merged_metadata, output)
@@ -11170,11 +11353,11 @@ class DNExif:
             self._save_webp(merged_metadata, output)
         elif file_ext == '.gif':
             self._save_gif(merged_metadata, output)
-        elif file_ext in {'.cr2', '.cr3', '.crw', '.nef', '.arw', '.dng', 
+        elif file_ext in {'.cr2', '.cr3', '.crw', '.nef', '.arw', '.dng',
                           '.orf', '.raf', '.rw2', '.srw', '.pef', '.x3f',
                           '.3fr', '.ari', '.bay', '.cap', '.dcs', '.dcr',
                           '.drf', '.eip', '.erf', '.fff', '.iiq', '.mef',
-                          '.mos', '.mrw', '.nrw', '.rwl', '.srf'}:
+                          '.mos', '.mrw', '.nrw', '.rwl', '.srf', '.sr2'}:
             self._save_raw(merged_metadata, output)
         elif file_ext in {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.m4a', '.aac', '.3gp', '.3g2'}:
             self._save_video(merged_metadata, output)
@@ -11485,6 +11668,12 @@ class DNExif:
         exif_version = '0300'  # Default to EXIF 3.0
         if hasattr(self, '_exif_parser') and self._exif_parser:
             exif_version = getattr(self._exif_parser, 'exif_version', '0300')
+        if not exif_version:
+            exif_version = '0300'
+        if isinstance(exif_version, bytes):
+            exif_version = exif_version.decode('ascii', errors='replace')
+        if not isinstance(exif_version, str):
+            exif_version = str(exif_version)
         
         writer = HEICWriter(exif_version=exif_version)
         writer.write_heic(str(self.file_path), metadata, str(output_path))
@@ -12193,4 +12382,3 @@ class DNExif:
     def __repr__(self) -> str:
         """String representation."""
         return f"DNExif(file_path='{self.file_path}', tags={len(self.metadata)})"
-
