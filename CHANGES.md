@@ -2,10 +2,6 @@
 
 All notable changes to DNExif will be documented in this file.
 
-## January 11, 2026 - Build 1719
-
-MOS read/write verification: Tested 4 MOS samples with 100% read/write/round-trip/integrity success. DNExif vs ExifTool match rate: 8.1% before writing, 10.3% after writing. Results saved to `tests/mos_read_write_test_results.json`.
-
 ## December 23, 2025 - Builds 1716-1718
 
 **MOS Parser & SubIFD Improvements (1718)**: Enhanced SubIFD traversal to process up to 50 SubIFDs (from 10), improved Leaf tag extraction with SLONG/SRATIONAL support, better error handling and bounds checking.
