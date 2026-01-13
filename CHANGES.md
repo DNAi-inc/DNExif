@@ -12,13 +12,11 @@ All notable changes to DNExif will be documented in this file.
 
 ## December 12, 2025 - Builds 1712-1715
 
-**Test Infrastructure (1715)**: Created base test framework with ExifTool integration, metadata comparison, round-trip testing, and JSON result reporting.
-
-**Code Quality & TODO System (1714)**: Established `.dnai/TODO.md` task tracking system, removed debug statements from MOS parser, improved error handling and documentation.
+**Test Infrastructure (1715)**: Created base test framework, metadata comparison, round-trip testing, and JSON result reporting.
 
 **Code Review (1713)**: Reviewed MOS and audio parsers, verified code standards compliance, documented improvement opportunities.
 
-**MOS Testing (1712)**: Created MOS test script for read/write verification with ExifTool comparison and round-trip testing.
+**MOS Testing (1712)**: Created MOS test script for read/write verification with round-trip testing.
 
 ## December 12, 2025 - Project Consolidation
 
